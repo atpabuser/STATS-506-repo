@@ -1,0 +1,210 @@
+---
+title: "Lecture 1 Notes"
+output: html_notebook
+---
+
+
+# Objects
+
+## Object Assignment
+We prefer to use `<-` to assign values to objects. While `=` can be used for assignment, we prefer not to since `=` is used to pass arguments to functions. But be consistent. 
+```{r}
+#here is an example of assignment
+x<-10
+y<-32
+
+z<-c(x,y) # an example of combining two objects into one object vector. 
+print(z)
+#here's another way to do assignment
+#9->w #not recommended. 
+
+str1 <- "mary"
+str2 <- "had a little lamb"
+z1 <-c(str1,str2)
+print(z1)
+
+#avoid
+
+```
+## Object Naming
+
+Do not use reserved words such as `pi`, `mean, `sum`, etc. 
+the three most common ways to create multi-word object names are 
+
+- snake_case
+- camelCase
+- dot.case
+
+```{r}
+#Object names are case sensitive. 
+var <- 3
+Var <- 4
+c(var,Var)
+#c is a function that creates a vector out of objects. 
+```
+## Value vs Reference (Expanded)
+
+R uses **copy-on-modify** semantics. This means objects behave as if they are stored by *value*, not by reference.
+
+R doesn't make a full copy every time you assign, it uses lazy copying. For example, when we do 'z<-c(x,y)', R stores the values *at that moment*. 
+Later changes to 'y' won't affect 'z', because 'z' already has its own copy of those number. 
+'y' is just a variable name bound to a value. 
+
+```{r}
+a <- 5
+b <- 10
+d <- c(a, b)
+b <- 15
+d   # (5, 10) – not updated when b changes
+
+x <- 10
+y <- 32
+z <- c(x, y)
+c(x, y, z)   # (10, 32, 10, 32)
+
+y <- 200
+c(x, y, z)   # (10, 200, 10, 32) – note z is unchanged
+
+k <- 1:3
+m <- k
+m[1] <- 99
+
+k #still 1 2 3
+m #now 99 2 3
+```
+## Environments
+
+By default, objects are created in the *global environment*. Use `ls()` to list them and `rm()` to remove them. 
+
+```{r}
+ls() #list all variables
+
+rm(a,b) #remove 'a', 'b'
+
+rm(list=ls()) #remove the entire workspace. 
+```
+
+## Working with Unknown Object Names
+
+Sometimes you need to work with objects whose names are only known at runtime.  
+Use `assign()` to **create or update** them, and `get()` to **access** them.
+
+```{r}
+# assign creates a variable by name: "setter"
+assign("y", 100)
+y    # 100
+
+# get retrieves a variable by name: "getter". 
+x <- 42
+get("x")    # 42
+```
+
+### Typical use cases: 
+
+- Creating multiple objects in a loop
+
+```{r}
+for (item in c("a", "b", "c"))
+  assign(item, runif(1)) #runif is a random number gen based on uniform dist. 
+                        #runif(n, min=0, max=1)
+get("a")
+get("b")
+get("c")
+
+```
+
+# Arithmetic Operations in R
+
+R supports standard arithmetic operators and vectorized calculation.
+
+### Basic Operators
+```{r}
+x <- 10; y <- 32
+x + y        # 42
+x - y        # -22
+x * y        # 320
+y / x        # 3.2
+y^2          # 1024
+11 %% 2      # 1 (remainder)
+11 %/% 2     # 5 (integer division) #discard the remainder. 
+```
+
+### Vectorized arithmetic.
+Element-wise operations. 
+
+```{r}
+
+#Simple case
+a<- 1
+b<- 5
+
+c(a,b) #[1,5]
+c(a,b)+3 #[4, 8]
+c(a,b)+c(3,50) #[4, 55]
+c(a,b)+c(100,0,-100,1000) #[101 5 -99 1005]. 
+```
+The above is the concept of recycling. Note that `c(a,b)` is of length 2 and `c(100,0,-100,1000)` is of length 4, i.e. multiples. so what `c(a,b)+c(100,0,-100,1000)` is doing is `c(a+100,b+0,a+-100, b+1000)`. 
+
+*what if the two vectors are not of matching lengths*
+
+```{r}
+c(a,b)+c(100,0,-100,1000,-1000)
+#so, -1000 gets applied to the first element of c: a. 
+
+```
+We can also do multiplication on vectors. 
+
+```{r}
+
+a <- c(1, 5)
+b <- c(2, -3)
+a * b   # (2, -15)
+
+x <- 4:6 #shorthand for c(4,5,6)
+y <- c(0, 1)
+x * y   # warning: length mismatch, result = (0, 5, 0)
+#this is (4*0, 5*1, 6*0)
+
+```
+
+R itself already has a number of common mathematical functions. These functions are vectorized. 
+
+```{r}
+z <- c(1, 4, 9)
+mean(z)       # 4.67
+sum(z)        # 14
+sqrt(z)       # (1, 2, 3)
+sd(z)         # 4
+var(z)
+exp(z)
+log(z)        # natural log
+sin(z)
+cos(z)
+floor(z/2)    #nearest integer below
+ceiling(z/2)  #nearest integer above
+```
+
+We can also nest functions 
+```{r}
+x<-4:6
+mean(log(floor(x)))
+```
+Numerical doubles have finite precision, which is the floating point problem. See below
+```{r}
+sqrt(2)^2 #2  
+sqrt(2)^2-2 #why is this not 2?
+sqrt(2)^2==2 #FALSE
+all.equal(sqrt(2)^2,2) 
+#all equal does not a logical if it fails. it will return the mean relative difference
+all.equal(sqrt(2)^3,2)
+#if using all equal, check if the output is TRUE. 
+all.equal(sqrt(2)^3,2)==TRUE
+
+```
+# R package system
+The primary way to install packages is `install.packages('pkg')`.
+Installing a package does not make it available to R. How to access objects contained in R?
+
+1. calling `library("pkg"). 
+2. using the `pkg::obj` construction to access a package's exported objects. 
+
