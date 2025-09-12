@@ -142,10 +142,7 @@ correlation_table
 
 Carry out a series of t-tests to examine whether the number of rings differs across the three sexes. Present the R output and interpret the results. (You may use an existing R function to carry out the t-test, or for minor extra credit, manually write your own calculation of the t-test p-values.)
 
-So we need to do the following t-tests: 
-1. Female vs Infant 
-2. Female vs Male
-3. Infant vs Male 
+So we need to do the following t-tests: 1. Female vs Infant 2. Female vs Male 3. Infant vs Male
 
 ```{r}
 #let's define the rings here so we don't need to retype over and over
@@ -187,4 +184,217 @@ if (t_test_IM$p.value<0.05) {
 } else {
   cat("There is no statistically significant difference between Infant and Male ring counts.")
 }
+```
+
+# Problem 2
+
+### 2a
+
+```{r}
+#import dataset
+food_data <- read.csv("C:/Users/hyperion/University of Michigan Dropbox/Deepan Islam/Fall 2025/506 R programming/food_expenditure.csv")
+
+(food_data)
+```
+
+### 2b
+
+Clean up the variable names. Simplify them.
+
+```{r}
+#cleanup the variable names
+
+colnames(food_data)<- c("ID", "Age", "Household_Size", "State", "Currency",
+                 "Total_Food_Exp", "Grocery_Exp", "Dining_Out_Exp","Misc_Food_Exp","Dining_Out_Count", "Alcohol_Included", "Food_Assistance")
+
+head(food_data)
+
+```
+
+### 2c
+
+Restrict the data to those paying in US dollars (USD). Show that it worked by confirming the number of observations before and after restricting the data.
+
+```{r}
+#Count before restriction 
+n_before <- nrow(food_data)
+cat("Initial number of observations is:",n_before,"\n")
+
+#restriction
+food_data<-food_data[food_data$Currency=="USD",]
+n_after <- nrow(food_data)
+cat("After restricting to USD, number of observations is:",n_after,"\n")
+```
+
+### 2d We will only consider people older than 18 but less than 100. BUT WE HAVE NA values. How do we deal with them? I googled this and found this reference: https://uc-r.github.io/missing_values
+
+We can use `is.na()`.
+
+```{r}
+food_data <- food_data[food_data$Age >= 18 & food_data$Age <= 100 & !is.na(food_data$Age), ]
+cat("After age cleaning, number of observations left is:", nrow(food_data), "\n")
+```
+
+### 2e. The variable related to state.
+
+Got to deal with missing states, invalid states and empty strings. Talking to gpt =\> R has a inbuilt state.abb. we can check `food_data$State` against it to make sure all state abbreviations are valid.
+
+`%in%` inspiration: https://www.r-bloggers.com/2022/07/how-to-use-in-operator-in-r/?utm_source=chatgpt.com
+
+```{r}
+valid_states <- state.abb
+food_data <- food_data[ !is.na(food_data$State) &
+                        food_data$State != "" &
+                        food_data$State %in% valid_states, ]
+cat("After state cleaning, number of observations left is:", nrow(food_data), "\n")
+
+```
+
+### 2f. The four variables related to food expenditures.
+
+Rules: Only consider positive values, discard missing values, discard any values above 3000/week for all 4 variables. Doesn't make sense to spend \$3000 a week on any of them.
+
+**NOTE THAT** *TOTAL_FOOD_EXP* is stored as a character! we got to make it numerical. Basically the R equivalent of casting.
+
+```{r}
+food_data$Total_Food_Exp   <- as.numeric(food_data$Total_Food_Exp)
+food_data$Grocery_Exp      <- as.numeric(food_data$Grocery_Exp)
+food_data$Dining_Out_Exp   <- as.numeric(food_data$Dining_Out_Exp)
+food_data$Misc_Food_Exp    <- as.numeric(food_data$Misc_Food_Exp)
+
+```
+
+```{r}
+#Cleaning time
+
+# Total_Food_Exp
+food_data <- food_data[ !is.na(food_data$Total_Food_Exp) &
+                         food_data$Total_Food_Exp >= 0 &
+                         food_data$Total_Food_Exp <= 3000, ]
+cat("After Total_Food_Exp clean, n is:", nrow(food_data), "\n")
+
+# Grocery_Exp
+food_data <- food_data[ !is.na(food_data$Grocery_Exp) &
+                         food_data$Grocery_Exp >= 0 &
+                         food_data$Grocery_Exp <= 3000, ]
+cat("After Grocery_Exp clean, n is:", nrow(food_data), "\n")
+
+# Dining_Out_Exp
+food_data <- food_data[ !is.na(food_data$Dining_Out_Exp) &
+                         food_data$Dining_Out_Exp >= 0 &
+                         food_data$Dining_Out_Exp <= 3000, ]
+cat("After Dining_Out_Exp clean, n is:", nrow(food_data), "\n")
+
+food_data <- food_data[ !is.na(food_data$Misc_Food_Exp) &
+                         food_data$Misc_Food_Exp >= 0 &
+                         food_data$Misc_Food_Exp <= 3000, ]
+cat("After Misc_Food_Exp clean. n is:", nrow(food_data), "\n")
+
+
+```
+
+### 2g
+
+Dining out cleaning
+
+Value has to be greater than 0 and less than or equal to 21 i.e. 3 meals a day \*7 = 21
+
+```{r}
+food_data <- food_data[ !is.na(food_data$Dining_Out_Count) &
+                         food_data$Dining_Out_Count >= 0 &
+                         food_data$Dining_Out_Count <= 21, ]
+
+cat("After the dining out cleaning, n is:", nrow(food_data), "\n")
+```
+
+### 2h
+
+**The final number of observations is 119**.
+
+# Problem 3: Collatz Conjecture
+
+### 3a
+
+Define the function `nextCollatz`
+
+```{r}
+#' Function to compute the next number in its Collatz sequence
+#' Collatz sequence: n/2 if n is even or 3*n+1 if n is odd
+#'
+#' @param n A single positive integer
+#' @return A single positive integer, the next Collatz value. 
+#' 
+
+nextCollatz <- function(n) {
+  if (!is.numeric(n) || length(n) != 1 || n <= 0 || n != floor(n)) {
+    stop("n is not a single positive integer")
+  } #If n is even divide by 2 or do 3n+1
+  if (n %% 2 == 0) {
+    return(n / 2)
+  } else {
+    return(3 * n + 1)
+  }
+}
+
+#Example 
+nextCollatz(5)
+nextCollatz(16)
+
+```
+
+### 3b
+
+Create a function `collatzSequence` that returns the Collatz sequence for a given input.
+
+```{r}
+#' Function to return the Collatz sequence for a given input. 
+#' Applies nextCollatz() repeatedly to produce the full Collatz sequence from starting value n to 1
+#' @param n A single positive integer
+#' @return A list containing the vector of the entries in the Collatz sequence beginning at the input and ending at 1 and the length of the Collatz sequence. 
+#' 
+#' Example: collatzSequence(5)$sequence should return [5, 16, 8, 4, 2, 1]
+#'          collatzSequence(5)$length should return 6
+
+collatzSequence <- function(n) {
+  # input validation (same as above)
+  if (!is.numeric(n) || length(n) != 1 || n <= 0 || n != floor(n)) {
+    stop("n is not a single positive integer")
+  } 
+  seq_vals <- n
+  # build the sequence from n to 1
+  while (n != 1) { 
+    n <- nextCollatz(n)
+    seq_vals <- c(seq_vals, n)
+  }
+  return(list(sequence = seq_vals, length = length(seq_vals)))
+}
+
+collatzSequence(5)
+
+collatzSequence(19)
+
+
+```
+
+### 3c
+
+find the shortest and longest Collatz sequence starting with values between 100 and 500, inclusive. In the case of ties, report the lowest starting value.
+
+```{r}
+
+start_vals <- 100:500
+lengths <- sapply(start_vals, function (n) collatzSequence(n)$length)
+
+#Find shortest sequence length and the smallest n that produces this
+min_length <- min(lengths)
+min_n <- (start_vals)[which(lengths==min_length)[1]]
+
+#Find longest sequence length and smallest n that produces this
+max_length <- max(lengths)
+max_n <- (start_vals)[which(lengths==max_length)[1]]
+
+cat("The shortest sequence length is:",min_length, "and starts at ",min_n,"\n")
+
+cat("The longest sequence length is:", max_length, "and starts at", max_n, "\n")
+
 ```
