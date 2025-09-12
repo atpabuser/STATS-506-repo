@@ -1,0 +1,190 @@
+---
+title: "HW1 Solutions"
+format: pdf
+editor: visual
+---
+
+# Problem 1:
+
+### 1a
+
+```{r}
+#1a. Import the data and give appropriate column names.
+
+#read abalone data file
+abalone_df <- read.table("C:/Users/hyperion/University of Michigan Dropbox/Deepan Islam/Fall 2025/506 R programming/abalone/abalone.data",sep=',', header=FALSE)
+
+#Assign column names according to abalone.names
+colnames(abalone_df) <- c("Sex", "Length", "Diameter", "Height", "Whole_Weight", "Shucked_Weight", "Viscera_Weight", "Shell_Weight", "Rings")
+
+head(abalone_df) #lets take a prelim look. 
+
+```
+
+### 1b
+
+```{r}
+sex_counts <-table(abalone_df$Sex)
+sex_counts
+
+males_count <-sum(abalone_df$Sex=="M")
+females_count <-sum(abalone_df$Sex=="F")
+infants_count <-sum(abalone_df$Sex=="I")
+
+cat("\nThe number of males is:",males_count, 
+    "\nThe number of females is", females_count, 
+    "\nThe number of infants is", infants_count)
+
+```
+
+### 1c (1)
+
+Which weight has the highest correlation with rings?
+
+```{r}
+#get weights from dataframe
+weights <- names(abalone_df)[5:8]
+
+#do correlations with ring
+weight_correlations <-sapply(abalone_df[weights], function(x) cor(x, abalone_df$Rings))
+
+#find which weight has the highest correlation
+highest_corr_weight <-names(which.max(weight_correlations))
+
+cat("The weight with the highest correlation to rings is:", highest_corr_weight, "and the correlation value is:",max(weight_correlations))
+
+```
+
+### 1c (2)
+
+For that weight, which sex has the highest correlation?
+
+```{r}
+
+#We know the weight with the highest correlation to rings is the Shell-Weight. 
+
+correlations_by_sex <- sapply(c("F", "I", "M"), function(s) {
+  subset_data <- abalone_df[abalone_df$Sex == s, ]
+  cor(subset_data$Shell_Weight, subset_data$Rings)
+})
+
+print(correlations_by_sex)
+
+highest_corr_sex <- names(which.max(correlations_by_sex))
+max_corr <- max(correlations_by_sex)
+
+cat("\nFor the shell weights,", highest_corr_sex, "has the highest correlation to rings with a value of ", max_corr)
+```
+
+### 1c (3)
+
+What are the weights of the abalone with the most rings?
+
+```{r}
+
+# Find max number of rings
+max_rings <- max(abalone_df$Rings)
+rows_max  <- which(abalone_df$Rings == max_rings)
+
+cat("Max number of rings:", max_rings, "\n")
+
+# Get all abalones with max rings
+max_rings_data <- abalone_df[abalone_df$Rings == max_rings,]
+
+# Display their weights
+cat("Abalone(s) with most rings (", max_rings, " rings):\n", sep = "")
+print(abalone_df[rows_max, c("Sex", weights), drop = FALSE])
+
+
+```
+
+### 1c (4)
+
+What percentage of abalones have a viscera weight larger than their shell weight?
+
+```{r}
+viscera_weight_comp <- mean(abalone_df$Viscera_Weight>abalone_df$Shell_Weight)*100
+
+cat("Percentage with viscera weight > shell weight:", round(viscera_weight_comp, 3), "%")
+
+```
+
+### 1d
+
+Create a table of correlations between weights and rings, within each sex. The columns should be the four weights, and the rows should be the sexes. (This table does not need to be “fancy” but should clearly identify what each value represents.)
+
+```{r}
+
+# Create correlation table
+
+sexes <-names(table(abalone_df$Sex))
+#weights were defined before
+
+corr_table <-matrix(nrow = length(sexes), ncol=length(weights)) 
+rownames(corr_table) <- sexes
+colnames(corr_table) <- weights
+
+# populate the table
+for(sx in sexes) {
+  subset_data <- abalone_df[abalone_df$Sex == sx, ]
+  for(weight in weights) {
+    correlation_table[sx, weight] <- cor(subset_data[[weight]], subset_data$Rings)
+  }
+}
+
+# Display result
+correlation_table
+
+
+```
+
+### 1e
+
+Carry out a series of t-tests to examine whether the number of rings differs across the three sexes. Present the R output and interpret the results. (You may use an existing R function to carry out the t-test, or for minor extra credit, manually write your own calculation of the t-test p-values.)
+
+So we need to do the following t-tests: 
+1. Female vs Infant 
+2. Female vs Male
+3. Infant vs Male 
+
+```{r}
+#let's define the rings here so we don't need to retype over and over
+female_rings<-abalone_df[abalone_df$Sex=="F","Rings"]
+infant_rings<-abalone_df[abalone_df$Sex=="I","Rings"]
+male_rings<-abalone_df[abalone_df$Sex=="M","Rings"]
+
+#Test 1: Female vs Infant
+t_test_FI <- t.test(female_rings, infant_rings)
+print(t_test_FI)
+
+#Test 2: Female vs Male
+t_test_FM <- t.test(female_rings, male_rings)
+print(t_test_FM)
+
+#Test 3: Infant vs Male
+t_test_IM <- t.test(infant_rings,male_rings)
+print(t_test_IM)
+
+#analysis of p-value
+
+#Case 1: 
+if (t_test_FI$p.value<0.05) {
+  cat("There is a statistically significant difference between Female and Infant ring counts.\n")
+} else {
+  cat("There is no statistically significant difference between Female and Infant ring counts")
+}
+
+#Case 2: 
+if (t_test_FM$p.value<0.05) {
+  cat("There is a statistically significant difference between Female and Male ring counts\n")
+} else {
+  cat("There is no statistically significant difference between Female and Male ring counts.")
+}
+
+#Case 3:
+if (t_test_IM$p.value<0.05) {
+  cat("There is a statistically significant difference between Infant and Male ring counts.\n")
+} else {
+  cat("There is no statistically significant difference between Infant and Male ring counts.")
+}
+```
