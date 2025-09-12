@@ -4,6 +4,8 @@ format: pdf
 editor: visual
 ---
 
+*Github link*: https://github.com/atpabuser/STATS-506-repo/tree/main/Homework1
+
 # Problem 1:
 
 ### 1a
