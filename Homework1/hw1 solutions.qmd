@@ -128,12 +128,12 @@ colnames(corr_table) <- weights
 for(sx in sexes) {
   subset_data <- abalone_df[abalone_df$Sex == sx, ]
   for(weight in weights) {
-    correlation_table[sx, weight] <- cor(subset_data[[weight]], subset_data$Rings)
+    corr_table[sx, weight] <- cor(subset_data[[weight]], subset_data$Rings)
   }
 }
 
 # Display result
-correlation_table
+print(corr_table)
 
 
 ```
