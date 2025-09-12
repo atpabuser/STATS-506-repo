@@ -194,7 +194,7 @@ if (t_test_IM$p.value<0.05) {
 #import dataset
 food_data <- read.csv("C:/Users/hyperion/University of Michigan Dropbox/Deepan Islam/Fall 2025/506 R programming/food_expenditure.csv")
 
-(food_data)
+#(food_data)
 ```
 
 ### 2b
@@ -239,7 +239,7 @@ cat("After age cleaning, number of observations left is:", nrow(food_data), "\n"
 
 Got to deal with missing states, invalid states and empty strings. Talking to gpt =\> R has a inbuilt state.abb. we can check `food_data$State` against it to make sure all state abbreviations are valid.
 
-`%in%` inspiration: https://www.r-bloggers.com/2022/07/how-to-use-in-operator-in-r/?utm_source=chatgpt.com
+`%in%` inspiration: https://www.r-bloggers.com/2022/07/how-to-use-in-operator-in-r/
 
 ```{r}
 valid_states <- state.abb
