@@ -208,3 +208,9 @@ Installing a package does not make it available to R. How to access objects cont
 1. calling `library("pkg"). 
 2. using the `pkg::obj` construction to access a package's exported objects. 
 
+We don't want to load anything beyond what we need. 3 ways from least common to most common. 
+1. :: and ::: i.e. `lme4::InstEval` or `lme4:::(some object)```
+2. library(), search()#where R is looking for objects. 
+3
+
+
