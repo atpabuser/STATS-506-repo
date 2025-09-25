@@ -127,3 +127,128 @@ cat("\nThe final value for n=",val,"using random_walk3() is:",random_walk3(val))
 
 
 ```
+
+### Case 2: $n=1000$
+
+```{r}
+set.seed(555)
+val2<-1000
+cat("The final value for n=",val2,"using random_walk1() is:",random_walk1(val2))
+
+set.seed(555)
+cat("\nThe final value for n=",val2,"using random_walk2() is:",random_walk2(val2))
+
+set.seed(555)
+cat("\nThe final value for n=",val2,"using random_walk3() is:",random_walk3(val2))
+
+```
+
+### 1c.
+
+Use the microbenchmark package to clearly demonstrate the speed of the implementations.Compare performance with a low input and a large input. Discuss results.
+
+```{r}
+library(microbenchmark)
+n_val1<-1000
+results_nval1 <-microbenchmark(
+  loop <- random_walk1(n_val1),
+  vectorized <- random_walk2(n_val1),
+  apply <- random_walk3(n_val1)
+)
+
+print(results_nval1)
+
+
+```
+
+```{r}
+
+n_val2<-100000
+results_nval2 <-microbenchmark(
+  loop <- random_walk1(n_val2),
+  vectorized <- random_walk2(n_val2),
+  apply <- random_walk3(n_val2)
+)
+
+print(results_nval2)
+
+
+```
+
+So, I expected the vectorized function to clearly be the fastest, (which it is in both cases) but I am quite surprised that my for-loop implementation is faster than the implementation using `sapply()`. I did some googling and found out the following links:
+
+1.  https://www.reddit.com/r/rstats/comments/9s778r/in_benchmark_tests_a_forloop_was_almost_50_faster/
+2.  https://www.tylermw.com/posts/data_analysis/theres-no-need-to-apply-yourself.html
+
+In either case, however, the best thing to do for the quickest implementation is vectorization. 
+
+### 1d. 
+
+Define a helper function to compute the probability the random walk ends at 0. Use vectorized random_walk implementation. WLOG it does not matter which one I choose as long as I fix the seed. 
+
+```{r}
+
+#' @param n number of steps in the random walk
+#' 
+#' @param num_sims number of simulations we run
+#' 
+#' @return estimated probability random walk ends at 0
+
+prob_zero_rw <- function(n,num_sims){
+  #run the random walk for the specified simulation size
+  final_positions <- numeric(num_sims)
+  
+  #loop to get final positions
+  for (i in 1:num_sims){
+    final_positions[i] <- random_walk2(n)
+  }
+  successes <- sum(final_positions == 0)
+  return (successes/num_sims)
+}
+```
+
+### Case 1: $n$=10
+```{r}
+set.seed(929)
+num_sims <- 10000
+prob_10 <- prob_zero_rw(10,num_sims)
+cat("The probability of the random walk going to zero after 10 steps is:",prob_10)
+
+```
+### Case 2: $n$=100
+```{r}
+set.seed(929)
+num_sims <- 10000
+prob_100 <- prob_zero_rw(100,num_sims)
+cat("The probability of the random walk going to zero after 100 steps is:",prob_100)
+
+```
+### Case 3: $n$=1000
+```{r}
+set.seed(929)
+num_sims <- 10000
+prob_1000 <- prob_zero_rw(1000,num_sims)
+cat("The probability of the random walk going to zero after 1000 steps is:",prob_1000)
+
+```
+As we increase the number of steps, the probability that the random walk ends at 0 converges to 0. As I have shown above, the probability gets closer and closer to 0 as I go from n=10,100,1000. This makes sense because as you increase the number of steps of the random walk, the range of possible positions it ends at grows much larger, so the probability we land at 0 decreases. 
+
+Here is a  graph visualizing this: 
+
+```{r}
+set.seed(929)
+
+#define the range of steps we plot
+n_values <-seq(10,1000,10)
+
+#compute probabilities
+probs <- sapply(n_values, prob_zero_rw,num_sims=5000)
+plot(x=n_values, y=probs, col="blue", xlab="Number of Steps", ylab="Probabilities")
+
+```
+
+Can see it converging to 0 as $n$ increases. 
+
+# Problem 2
+
+
