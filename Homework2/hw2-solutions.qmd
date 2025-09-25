@@ -8,21 +8,17 @@ editor: visual
 
 Consider a 1-dimensional random walk with the following rules:
 
-1. Start at 0.
-2. At each step, move +1 or -1 with 50/50 probability.
-If +1 is chosen, 5% of the time move +10 instead.
-If -1 is chosen, 20% of the time move -3 instead.
-Repeat steps 2-4 $n$ times.
-(Note that if the +10 is chosen, it’s not +1 then +10, it is just +10.)
+1.  Start at 0.
+2.  At each step, move +1 or -1 with 50/50 probability. If +1 is chosen, 5% of the time move +10 instead. If -1 is chosen, 20% of the time move -3 instead. Repeat steps 2-4 $n$ times. (Note that if the +10 is chosen, it’s not +1 then +10, it is just +10.)
 
 Write a function to determine the end position of this random walk.
 
 The input and output should be:
 
-Input: The number of steps
-Output: The final position of the walk
+Input: The number of steps Output: The final position of the walk
 
-### Version 1: Using a loop 
+### Version 1: Using a loop
+
 ```{r}
 #' Random Walk Simulation
 #'
@@ -61,15 +57,16 @@ random_walk1 <- function(n) {
 }
 ```
 
+### Version 2: No loop, vectorized
 
-### Version 2: No loop, vectorized 
+To answer the question: The order of steps does not matter, we only need the final position since the final position, (the sum), is the sum of i.i.d steps
 
-To answer the question: The order of steps does not matter, we only need the final position since the final position, (the sum), is the sum of i.i.d steps 
-Marginal computations: 
-- (+1): 0.5*0.95 = 0.475
-- (+10): 0.5*0.05 = 0.025
-- (-1): 0.5*0.80 = 0.40
-- (-3): 0.5*0.20 = 0.10  
+**Marginal computations:**
+
+-   (+1): $0.5 \times 0.95 = 0.475$
+-   (+10): $0.5 \times 0.05 = 0.025$
+-   (–1): $0.5 \times 0.80 = 0.40$
+-   (–3): $0.5 \times 0.20 = 0.10$
 
 ```{r}
 #' Vectorized 1D Random Walk Simulation 
@@ -110,11 +107,14 @@ random_walk3 <- function(n) {
 
 ```
 
-
+### Demonstrate that all versions work by running the following:
 
 ```{r}
-#| echo: false
-2 * 2
-```
+random_walk1(10)
+random_walk2(10)
+random_walk3(10)
+random_walk1(1000)
+random_walk2(1000)
+random_walk3(1000)
 
-The `echo: false` option disables the printing of code (only output is displayed).
+```
