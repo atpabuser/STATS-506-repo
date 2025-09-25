@@ -180,11 +180,11 @@ So, I expected the vectorized function to clearly be the fastest, (which it is i
 1.  https://www.reddit.com/r/rstats/comments/9s778r/in_benchmark_tests_a_forloop_was_almost_50_faster/
 2.  https://www.tylermw.com/posts/data_analysis/theres-no-need-to-apply-yourself.html
 
-In either case, however, the best thing to do for the quickest implementation is vectorization. 
+In either case, however, the best thing to do for the quickest implementation is vectorization.
 
-### 1d. 
+### 1d.
 
-Define a helper function to compute the probability the random walk ends at 0. Use vectorized random_walk implementation. WLOG it does not matter which one I choose as long as I fix the seed. 
+Define a helper function to compute the probability the random walk ends at 0. Use vectorized random_walk implementation. WLOG it does not matter which one I choose as long as I fix the seed.
 
 ```{r}
 
@@ -208,6 +208,7 @@ prob_zero_rw <- function(n,num_sims){
 ```
 
 ### Case 1: $n$=10
+
 ```{r}
 set.seed(929)
 num_sims <- 10000
@@ -215,7 +216,9 @@ prob_10 <- prob_zero_rw(10,num_sims)
 cat("The probability of the random walk going to zero after 10 steps is:",prob_10)
 
 ```
+
 ### Case 2: $n$=100
+
 ```{r}
 set.seed(929)
 num_sims <- 10000
@@ -223,7 +226,9 @@ prob_100 <- prob_zero_rw(100,num_sims)
 cat("The probability of the random walk going to zero after 100 steps is:",prob_100)
 
 ```
+
 ### Case 3: $n$=1000
+
 ```{r}
 set.seed(929)
 num_sims <- 10000
@@ -231,9 +236,10 @@ prob_1000 <- prob_zero_rw(1000,num_sims)
 cat("The probability of the random walk going to zero after 1000 steps is:",prob_1000)
 
 ```
-As we increase the number of steps, the probability that the random walk ends at 0 converges to 0. As I have shown above, the probability gets closer and closer to 0 as I go from n=10,100,1000. This makes sense because as you increase the number of steps of the random walk, the range of possible positions it ends at grows much larger, so the probability we land at 0 decreases. 
 
-Here is a  graph visualizing this: 
+As we increase the number of steps, the probability that the random walk ends at 0 converges to 0. As I have shown above, the probability gets closer and closer to 0 as I go from n=10,100,1000. This makes sense because as you increase the number of steps of the random walk, the range of possible positions it ends at grows much larger, so the probability we land at 0 decreases.
+
+Here is a graph visualizing this:
 
 ```{r}
 set.seed(929)
@@ -247,8 +253,41 @@ plot(x=n_values, y=probs, col="blue", xlab="Number of Steps", ylab="Probabilitie
 
 ```
 
-Can see it converging to 0 as $n$ increases. 
+Can see it converging to 0 as $n$ increases.
 
 # Problem 2
+
+Using a Monte Carlo simulation, estimate the average number of cars that pass an intersection per day under the following assumptions:
+
+-   From midnight until 7 AM, the distribution of cars per hour is Poisson with mean 1.
+-   From 9am to 4pm, the distribution of cars per hour is Poisson with mean 8.
+-   From 6pm to 11pm, the distribution of cars per hour is Poisson with mean 12.
+-   During rush hours (8am and 5pm), the distribution of cars per hour is Normal with mean 60 and variance 12
+
+**Do not use any loops**
+
+For a poisson rv, the expected value is $n$$\lambda$. The theoretical expected value would be: (8 $\times$ 1)+(1 $\times$ 60)+ (8 $\times$ 8)+(1 $\times$ 60)+(6 $\times$ 12)=264
+
+```{r}
+n_simuls <- 10000
+set.seed(123)
+
+midnight_7am <- matrix(rpois(n_simuls*8, lambda=1), nrow=n_simuls, ncol=8)
+rush_8am <- rnorm(n_simuls, mean = 60, sd = sqrt(12))
+nine_4pm <- matrix(rpois(n_simuls * 8, lambda = 8), nrow = n_simuls, ncol = 8)
+rush_5pm <- rnorm(n_simuls, mean = 60, sd = sqrt(12))
+six_11pm <- matrix(rpois(n_simuls*6, lambda=12), nrow=n_simuls,ncol=6)
+
+daily_sum <- rowSums(midnight_7am)+rush_8am+rowSums(nine_4pm)+rush_5pm+rowSums(six_11pm)
+
+empirical_ev <-mean(daily_sum)
+print(empirical_ev)
+
+```
+
+So, the empirical EV calculated by Monte Carlo is a close approximation to the theoretical EV. 
+
+# Problem 3
+
 
 
