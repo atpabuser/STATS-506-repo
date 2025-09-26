@@ -456,7 +456,7 @@ model_view_count<- lm(view_count_log ~ funny + show_product_quickly + patriotic 
                celebrity + danger + animals + use_sex + year, youtube_total)
 
 #Comparison table 
-comparison_table < cbind(Beta_hat_manual = beta_hat, Beta_hat_lm = coef(model_view_count))
+comparison_table <- cbind(Beta_hat_manual = beta_hat, Beta_hat_lm = coef(model_view_count))
 print(comparison_table)
 
 
