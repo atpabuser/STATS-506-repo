@@ -289,5 +289,184 @@ So, the empirical EV calculated by Monte Carlo is a close approximation to the t
 
 # Problem 3
 
+### 3a 
+Often in data analysis, we need to de-identify it. This is more important for studies of people, but let’s carry it out here. Remove any column that might uniquely identify a commercial. This includes but isn’t limited to things like brand, any URLs, the YouTube channel, or when it was published.
+
+Report the dimensions of the data after removing these columns.
+
+```{r}
+
+youtube <- read.csv('https://raw.githubusercontent.com/rfordatascience/tidytuesday/master/data/2021/2021-03-02/youtube.csv')
+
+#head(youtube)
+#names(youtube)
+
+identifying_cols <- c("brand", "superbowl_ads_dot_com_url", "youtube_url","title", "description", "thumbnail", "channel_title","published_at")
+
+youtube_cleaned <- youtube[,!(names(youtube) %in% identifying_cols)]
+
+print(dim(youtube_cleaned))
+
+sum(is.na(youtube_cleaned$view_count))
+
+```
+247 rows and 17 columns. 
+
+### 3b 
+
+For each of the following variables, examine their distribution. Determine whether i) The variable could be used as is as the outcome in a linear regression model, ii) The variable can use a transformation prior to being used as the outcome in a linear regression model, or iii) The variable would not be appropriate to use as the outcome in a linear regression model.
+
+For each variable, report which category it falls in. If it requires a transformation, carry such a transformation out and use that transformation going forward.
+
+View counts
+Like counts
+Dislike counts
+Favorite counts
+Comment counts
+(Hint: At least the majority of these variables are appropriate to use.)
+
+### Examine the data
+
+```{r}
+hist(youtube_cleaned$view_count, main="Views", col="red")
+hist(youtube_cleaned$like_count, main="Likes", col="red")
+hist(youtube_cleaned$dislike_count, main="Dislikes", col="red")
+hist(youtube_cleaned$favorite_count, main="Favorites", col="red")
+hist(youtube_cleaned$comment_count, main="Comments", col="red")
+```
+1. View-count is right-skewed. Most ads have very little views, only some ads go viral. Consider a log transform. Category II
+2. Likes: also right-skewed. Consider a log transform. Category II
+3. dislike count: right-skewed, do a log transform. Category II
+4. favorites: has no predictive value. Category III. In fact, it should be dropped since most of the videos have zero favorites and missing values. Also, youtube no longer records public favorite counts. 
+5. Comments: also right-skewed, do a log transform. Category II
+
+None of these variables are good match for Category I either. They are strongly skewed and have too many zeroes. 
+
+###do log transforms and drop favorite_count
+https://scicomp.stackexchange.com/questions/20629/when-should-log1p-and-expm1-be-used
+
+I will use `log1p()` to handle zeroes present in the dataset. 
+
+```{r}
+#log transforms
+youtube_cleaned$view_count_log <- log1p(youtube_cleaned$view_count)
+youtube_cleaned$like_count_log <- log1p(youtube_cleaned$like_count)
+youtube_cleaned$dislike_count_log <- log1p(youtube_cleaned$dislike_count)
+youtube_cleaned$comment_count_log <- log1p(youtube_cleaned$comment_count)
+#drop favorite_count
+youtube_cleaned$favorite_count <- NULL
+```
+
+
+```{r}
+summary(youtube_cleaned$view_count_log)
+```
+
+### 3c. 
+For each variable in part b. that are appropriate, fit a linear regression model predicting them based upon each of the seven binary flags for characteristics of the ads, such as whether it is funny. Control for year as a continuous covariate. Discuss the results. Identify the direction of any statistically significant results.
+
+
+### Answer
+
+We are going to do 4 separate linear regressions using `lm()`. For each model, the predicted variable will be one of the log-transformed count variables we handled in 3b. The covariates/predictors will be the seven binary flags and we control for year as a continuous covariate. I will then use the `summary()` for each regression to look for predictors where the p-value < 0.05. 
+
+
+### predicting log(view_count)
+```{r}
+model_views <- lm(view_count_log ~ funny + show_product_quickly + patriotic + 
+                              celebrity + danger + animals + use_sex + year, 
+                  data = youtube_cleaned)
+summary(model_views)
+```
+
+```{r}
+# Model 2: Predicting Log Like Counts
+model_likes <- lm(like_count_log ~ funny + show_product_quickly + patriotic + 
+                              celebrity + danger + animals + use_sex + year, 
+                  data = youtube_cleaned)
+summary(model_likes)
+```
+
+```{r}
+# Model 3: Predicting Log DisLike Counts
+model_dislikes <- lm(dislike_count_log ~ funny + show_product_quickly + patriotic + 
+                                  celebrity + danger + animals + use_sex + year, 
+                     data = youtube_cleaned)
+summary(model_dislikes)
+```
+
+```{r}
+# Model 4: Predicting Comment Counts
+model_comments <- lm(comment_count_log ~ funny + show_product_quickly + patriotic + 
+                                  celebrity + danger + animals + use_sex + year, 
+                     data = youtube_cleaned)
+summary(model_comments)
+```
+There are multiple things to address here: Let's start with the F-test. 
+For View Count, F-statistic p-value: 0.631 means the model as a whole is not statistically significant i.e. the model with the seven flags and year together DOES NOT explain view counts better than a model only having an intercept. 
+
+For like-count, F-statistic p-value of 0.0342 is significant but only the Year predictor was significant so year drives the significance
+
+For Dislike-count, it is the same case as like-count, driven by Year. 
+
+For Comment Count, the F statistic p-value is 0.06748, so the model is not significant but neither are any the predictors. 
+
+Overall for the predictors, only YEAR was significant with a positive effect on likes and dislikes, which makes sense since newer advertisements get more attention and hence more likes and dislikes. 
+
+For Comment Count, the coefficient for YEAR was positive but just shy of <0.05. 
+
+For View Count, there was no significant predictors. 
+
+Advertisement characteristics such as: funny, patriotic, celebrity, danger, animals, sex, showing product quickly were not statistically significant. This seems counterintuitive to me, but I speculate it may be for the following reasons: 
+  i. Looking at an advertisement as a set of binary traits does not reflect real-world properties. Advertisements can satisfy multiple categories at once, i.e. multicollinearity
+  ii. The variables we omitted in the beginning could have effected the statistical strength of our binary predictors. 
+  iii. Sample size is not large enough. 
+
+
+### 3d.
+Consider only the outcome of view counts. Calculate $\hat{\beta}$ manually (without using `lm()`) by first creating a proper design matrix, then using matrix algebra to estimate $\hat{\beta}$. Confirm that you get the same result as `lm()` did in part c.
+
+
+```{r}
+model_vars <- c("view_count_log", "funny", "show_product_quickly", "patriotic", 
+                "celebrity", "danger", "animals", "use_sex", "year")
+
+youtube_model_data <- youtube_cleaned[, model_vars]
+
+youtube_total <- na.omit(youtube_model_data) #the lm() function omits NA values, so we replicate this here. 
+ 
+#Define X and Y
+
+Y <- youtube_total$view_count_log
+X <- model.matrix(~ funny + show_product_quickly + patriotic + celebrity + 
+                  danger + animals + use_sex + year, youtube_total)
+
+#Solve for beta hat manually
+
+beta_hat <- solve(t(X) %*% X) %*% t(X) %*% Y
+
+#convert beta_hat into vector
+beta_hat_vector <- drop(beta_hat)
+
+#Now compute the beta using lm()
+
+model_view_count<- lm(view_count_log ~ funny + show_product_quickly + patriotic + 
+               celebrity + danger + animals + use_sex + year, youtube_total)
+
+#Comparison table 
+comparison_table < cbind(Beta_hat_manual = beta_hat, Beta_hat_lm = coef(model_view_count))
+print(comparison_table)
+
+
+#Check for equality
+equal_check <- all.equal(beta_hat_vector, coef(model_view_count))
+cat("The beta hat calculated by manual method matches lm beta hat?: ",equal_check)
+
+```
+So, they match. 
+
+
+
+
 
 
