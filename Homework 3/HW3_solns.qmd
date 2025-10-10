@@ -1,0 +1,421 @@
+---
+title: "HW3 Solutions"
+author: "Deepan"
+format: html
+editor: visual
+---
+
+# 1
+
+### a.) download AUX_I and DEMO_I plus load them into R
+
+### Loading XPT file can be done thru Haven package, part of tidyverse
+
+Reference: https://haven.tidyverse.org/reference/read_xpt.html
+
+```{r}
+library(tidyverse)
+library(haven)
+
+AUX_I  <- read_xpt("AUX_I.XPT")
+DEMO_I <- read_xpt("DEMO_I.XPT")
+
+merge_df <- inner_join(AUX_I, DEMO_I,by="SEQN")
+
+cat("The dimension of the merged dataframe is:", dim(merge_df))
+
+```
+
+### b. Check Gender, Citizenship status, number of children 5 years or younger, annual household income (there's an issue with the ordering of the categories, take a look, identify the issue and implement a solution.)
+
+The issue with Annual HouseHold Income is that some of the categories overlap with each other, precisely codes 12-13,14 which results in double-counting. My approach is to drop 12, 13, 14, 77,99 (which are the non-responses)
+
+```{r}
+cleaned_df <- merge_df %>%
+  mutate(
+    #gender
+    gender = factor(ifelse(RIAGENDR==1, "Male",
+                          ifelse(RIAGENDR==2,"Female",NA)),
+                   levels=c("Female","Male")),
+    #citizen
+    citizen = factor(ifelse(DMDCITZN==1, "Citizen",
+                            ifelse(DMDCITZN==2, "Non-Citizen",NA)),
+                     levels=c("Citizen","Non-Citizen")),
+    #children at most 5 years old
+    num_children_under_5 = ifelse(DMDHHSZA %in% 0:3,DMDHHSZA, NA), 
+    
+    #income fixed
+    income_label = ifelse(INDHHIN2 == 1,  "$0-4,999",
+                   ifelse(INDHHIN2 == 2,  "$5,000-9,999",
+                   ifelse(INDHHIN2 == 3,  "$10,000-14,999",
+                   ifelse(INDHHIN2 == 4,  "$15,000-19,999",
+                   ifelse(INDHHIN2 == 5,  "$20,000-24,999",
+                   ifelse(INDHHIN2 == 6,  "$25,000-34,999",
+                   ifelse(INDHHIN2 == 7,  "$35,000-44,999",
+                   ifelse(INDHHIN2 == 8,  "$45,000-54,999",
+                   ifelse(INDHHIN2 == 9,  "$55,000-64,999",
+                   ifelse(INDHHIN2 == 10, "$65,000-74,999",
+                   ifelse(INDHHIN2 == 14, "$75,000-99,999",
+                   ifelse(INDHHIN2 == 15, "$100,000+",NA)))))))))))),
+    income = factor(income_label,
+                    levels = c("$0-4,999", "$5,000-9,999", "$10,000-14,999", "$15,000-19,999","$20,000-24,999", "$25,000-34,999", "$35,000-44,999","$45,000-54,999", "$55,000-64,999", "$65,000-74,999","$75,000-99,999", "$100,000+"),
+      ordered = TRUE
+    ),
+income_ordered = as.numeric(income), 
+
+#typanometric width
+typ_right = ifelse(AUXTWIDR %in% c(555,777,888), NA, AUXTWIDR),
+typ_left = ifelse(AUXTWIDL %in% c(555,777,888),NA,AUXTWIDL)
+) %>%
+  
+  select(SEQN, gender, citizen, num_children_under_5,income, income_ordered, typ_right, typ_left)
+  
+
+```
+
+### c.
+
+### Fit 4 Poisson Regressions
+
+Fit the models
+
+```{r}
+#Case 1: 1R-Right ear; gender
+model_1R <- glm(typ_right~gender, data=cleaned_df, family = poisson())
+
+#Case 2: 2R-Right ear; gender, citizenship status (as categorical), #number of children cts, annual house income cts
+
+model_2R <- glm(typ_right ~ gender + citizen +
+                          num_children_under_5 + income_ordered,
+              data = cleaned_df, family = poisson())
+
+#Case 3: 1L: Left ear; gender
+model_1L <- glm(typ_left ~ gender,
+              data = cleaned_df, family = poisson())
+
+#Case 4: 2L: Left Ear; gender, citizenship status (as categorical), #number of children cts, annual house income cts
+
+model_2L <- glm(typ_left ~ gender + citizen +
+                         num_children_under_5 + income_ordered,
+              data = cleaned_df, family = poisson())
+```
+
+### Make a nice table
+
+```{r}
+library(stargazer)
+
+models <- list(model_1R, model_2R, model_1L, model_2L)
+
+#pseudo-R^2
+pseudo_r2 <- sapply(models, function(m) 1 - (m$deviance / m$null.deviance))
+
+model_n <- sapply(models, function(m) length(m$y))
+
+stargazer(models,
+  type = "text",  
+  title = "Poisson GLM for Tympanometric Width",
+  column.labels = c("Right Ear (Reduced)", "Right Ear (Full)",
+                    "Left Ear (Reduced)",  "Left Ear (Full)"),
+  dep.var.labels.include = FALSE,
+  apply.coef = exp,          # get IRR
+  covariate.labels = c(
+    "Male",                    
+    "Non-Citizen",              
+    "Number of Children At Most 5 Years", 
+    "Income"      
+  ),
+  digits = 3,
+  omit="Intercept",
+  add.lines = list(
+    c("Pseudo R-Squared", format(round(pseudo_r2,4)))
+  ),
+  notes.append=FALSE,
+  single.row=FALSE,
+  header=FALSE
+)
+```
+# 1d 
+
+The estimate is the log of the ratio between meales and females. The exp(-0.0186)=0.982 which is the Incidence Rate Ratio. Given that p-value <0.05 and that males have an average tympanometric width about 1.8% lower than females in the left ear when we adjust for citizenship, number of young children and income levels. 
+
+```{r}
+summary(model_2L)$coefficients["genderMale", ]
+exp(coef(model_2L))
+
+```
+
+# Problem 2
+
+```{r}
+library(DBI)
+library(RSQLite)
+library(microbenchmark)
+
+
+sakila <- dbConnect(RSQLite::SQLite(), "sakila_master.db")
+tables <- dbListTables(sakila)
+#print(tables)
+
+valid_tables <- tables[!grepl("_list$", tables)]
+print(valid_tables)
+
+```
+### Problem 2a
+
+```{r}
+#first way
+customers <-dbGetQuery(sakila,"SELECT store_id, active FROM customer")
+r_approach1 <- function() {
+  customers %>%
+    group_by(store_id) %>%
+    summarise(
+      total_customers=n(),
+      active_customers=sum(active==1),
+      percent_active=(active_customers/total_customers)*100
+    )
+}
+r_result_1<-r_approach1()
+print(r_result_1)
+
+```
+
+```{r}
+# sql_approach "
+
+sql_approach1 <- function() {dbGetQuery(sakila, "
+  SELECT
+    store_id,
+    COUNT(customer_id) AS total_customers,
+    SUM(active) AS active_customers,
+    100.0 * SUM(active) / COUNT(customer_id) AS percent_active
+  FROM customer
+  GROUP BY store_id
+")
+}
+sql_result_1<-sql_approach1()
+print(sql_result_1)
+
+```
+
+```{r}
+#benchhmark
+benchmark_1 <-microbenchmark(
+  r_bench1 = r_approach1(),
+  SQL_bench1 = sql_approach1(),
+  times=50
+)
+print(benchmark_1)
+```
+Clearly SQL approach is faster. 
+
+### Problem 2b
+
+
+```{r}
+
+staff <- dbGetQuery(sakila, "SELECT * FROM staff")
+address <- dbGetQuery(sakila, "SELECT * FROM address")
+city <- dbGetQuery(sakila, "SELECT * FROM city")
+country <- dbGetQuery(sakila, "SELECT * FROM country")
+
+r_approach2 <- function() {
+  staff %>%
+    left_join(address, by = "address_id") %>%
+    left_join(city, by = "city_id") %>%
+    left_join(country, by = "country_id") %>%
+    select(first_name, last_name, country)
+}
+r_result_2<-r_approach2()
+
+print(r_result_2)
+
+```
+
+```{r}
+sql_approach2 <- function() {
+  dbGetQuery(sakila, "
+    SELECT
+      s.first_name,
+      s.last_name,
+      co.country
+    FROM staff AS s
+    INNER JOIN address AS a ON s.address_id = a.address_id
+    INNER JOIN city AS ci ON a.city_id = ci.city_id
+    INNER JOIN country AS co ON ci.country_id = co.country_id
+  ")
+}
+sql_result_2 <- sql_approach2()
+print(sql_result_2)
+```
+
+```{r}
+benchmark_2 <-microbenchmark(
+  r_bench2 = r_approach2(),
+  SQL_bench2 = sql_approach2(),
+  times=50
+)
+print(benchmark_2)
+```
+
+### Problem 2c
+
+```{r}
+
+payment <- dbGetQuery(sakila, "SELECT * FROM payment")
+rental<- dbGetQuery(sakila, "SELECT * FROM rental")
+inventory <- dbGetQuery(sakila, "SELECT * FROM inventory")
+film <- dbGetQuery(sakila, "SELECT * FROM film")
+
+r_approach3 <- function() {
+  film %>%
+    inner_join(inventory, by = "film_id") %>%
+    inner_join(rental, by = "inventory_id") %>%
+    inner_join(payment, by = "rental_id") %>%
+    group_by(title) %>%
+    summarise(total_revenue = sum(amount)) %>%
+    ungroup() %>%
+    filter(total_revenue == max(total_revenue))
+}
+r_result_3 <- r_approach3()
+print(r_result_3)
+```
+
+```{r}
+sql_approach3 <- function() {
+  dbGetQuery(sakila, "
+    SELECT f.title, SUM(p.amount) as total_revenue
+    FROM film f
+    JOIN inventory i ON f.film_id = i.film_id
+    JOIN rental r ON i.inventory_id = r.inventory_id
+    JOIN payment p ON r.rental_id = p.rental_id
+    GROUP BY f.film_id, f.title
+    HAVING SUM(p.amount) = (
+      SELECT MAX(revenue) 
+      FROM (
+        SELECT SUM(p2.amount) as revenue
+        FROM payment p2
+        JOIN rental r2 ON p2.rental_id = r2.rental_id
+        JOIN inventory i2 ON r2.inventory_id = i2.inventory_id
+        JOIN film f2 ON i2.film_id = f2.film_id
+        GROUP BY f2.film_id
+      )
+    )
+  ")
+}
+sql_result_3 <- sql_approach3()
+print(sql_result_3)
+
+
+```
+
+```{r}
+benchmark_3 <-microbenchmark(
+  r_bench3 = r_approach3(),
+  SQL_bench3 = sql_approach3(),
+  times=50
+)
+print(benchmark_3)
+```
+
+# Problem 3
+
+```{r}
+aus_data<-read.csv("au-500.csv")
+#view(aus_data)
+names(aus_data)
+```
+### 3a.
+
+```{r}
+is_com <- grepl("\\.com$", aus_data$web)
+
+percentage_com <- mean(is_com) * 100
+
+cat("Percentage of .com websites is:", percentage_com)
+
+
+```
+
+### 3b.
+
+```{r}
+domain <- sub(".*@", "", aus_data$email)
+sort(table(domain), decreasing = TRUE)[1]
+
+```
+
+### 3c.
+
+```{r}
+special_char <- grepl("[^A-Za-z ,]", aus_data$company_name)
+percentage_special <- mean(special_char) * 100
+special_noamp<-grepl("[^A-Za-z ,&]", aus_data$company_name)
+percen_special_noamp<-mean(special_noamp)*100
+
+print(percentage_special)
+print(percen_special_noamp)
+
+```
+### 3d.
+
+```{r}
+
+standardize_phone <- function(x) {
+  digits <- gsub("\\D", "", x)
+  ifelse(nchar(digits) == 10,
+         paste0(substr(digits, 1, 4), "-", substr(digits, 5, 7), "-", substr(digits, 8, 10)),phone)
+}
+
+aus_data$phone1_std <- standardize_phone(aus_data$phone1)
+aus_data$phone2_std <- standardize_phone(aus_data$phone2)
+
+phone1_std <- standardize_phone(aus_data$phone1)
+phone2_std <- standardize_phone(aus_data$phone2)
+
+head(aus_data[c("phone1_std","phone2_std")], 10)
+
+```
+
+### 3e.
+
+
+```{r}
+apt_numbers <- str_extract(aus_data$address, "\\d+")
+apt_numbers <- as.numeric(apt_numbers)
+apt_numbers <- apt_numbers[!is.na(apt_numbers) & apt_numbers > 0]
+
+hist(log(apt_numbers), 
+     main = "Histogram of Log Apartment Numbers",
+     xlab = "Log(Apartment Number)")
+```
+
+### 3f.
+
+```{r}
+# Get first digits
+first_digits <- as.integer(substr(as.character(apt_numbers), 1, 1))
+first_digits <- first_digits[first_digits >= 1 & first_digits <= 9]
+
+digit_counts <- table(first_digits)
+obs_ratio <- digit_counts / sum(digit_counts)
+
+#expected ratio
+exp_ratio <- log10(1 + 1/(1:9))
+
+benford_results <- data.frame(
+  digit = 1:9,
+  observed = obs_ratio,
+  expected = exp_ratio
+)
+
+print(benford_results)
+
+```
+
+Not a chance. 
+
+
+
+
+
