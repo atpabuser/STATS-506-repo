@@ -1,0 +1,469 @@
+---
+title: "HW 4 Solutions"
+author: "Deepan"
+format:
+  html:
+    self-contained: true
+---
+
+
+# Problem 1
+
+### 1a. Generate a table (which can be a tibble) of vote count (regardless of party) per year/type and make it sort by vote count. 
+
+```{r}
+
+library(nzelect)
+library(tidyr)
+library(dplyr)
+library(readr)
+
+votes_by_year_type<- nzge %>%
+  group_by(election_year, voting_type) %>%
+  summarise(total_votes = sum(votes), .groups = "drop") %>%
+  arrange(desc(total_votes))
+
+votes_by_year_type
+
+```
+
+### 1b. Focus only on the 2014 election. Report the proportion of votes for each party in the Candidate election. Again, produce a nice table and sort it by percent of vote.
+
+
+```{r}
+
+candidate_2014 <- nzge %>%
+  filter(election_year == 2014, voting_type == "Candidate") %>%
+  group_by(party) %>%
+  summarize(votes = sum(votes, na.rm = TRUE), .groups = "drop") %>%
+  mutate(
+    `Proportion (%)` = round(100 * votes / sum(votes), 4)
+  ) %>%
+  select(
+     Party = party,
+    `Total Votes` = votes,
+    `Proportion (%)`
+  ) %>%
+  arrange(desc(`Proportion (%)`))
+
+candidate_2014
+
+```
+
+
+### 1c. Produce a nice table indicating, for each year, which party won the Candidate vote and which party won the Party vote.
+
+
+
+```{r}
+# Part 3: Winning party for each year by vote type
+winners_pervote <- nzge %>%
+  group_by(election_year, voting_type, party) %>%
+  summarise(total_votes = sum(votes, na.rm = TRUE), .groups = "drop") %>%
+  group_by(election_year, voting_type) %>%
+  mutate(is_winner = total_votes == max(total_votes)) %>%
+  filter(is_winner) %>%
+  select(
+    election_year, 
+    voting_type, 
+    winning_party = party, 
+    total_votes) %>%
+  arrange(election_year, voting_type)
+
+winners_pervote
+
+```
+
+
+# Question 2
+
+Before solving any of the questions, I want to address some of the tournaments in the data that have tourney_date in December 2018. 
+
+```{r}
+atp19 <- read_csv("atp_matches_2019.csv")
+
+tourn_2018_dates <- atp19 %>%
+  filter(
+    grepl("^2019", tourney_id),     
+    grepl("^2018", as.character(tourney_date))
+  ) %>%
+  distinct(tourney_id, tourney_name, tourney_date, surface, draw_size) %>%
+  arrange(tourney_date)
+
+tourn_2018_dates
+
+```
+
+There are 3 tournaments: Brisbane, Doha and Pune that have Tourney-Date of 12/31/2018. For the sake of this problem, 'tourney_id()' indicates they are part of the 2019 ATP season. Additionally, I did some further googling of these three tournaments. 
+
+1. https://en.wikipedia.org/wiki/2019_Brisbane_International
+2. https://en.wikipedia.org/wiki/2019_Qatar_ExxonMobil_Open
+3. https://en.wikipedia.org/wiki/2019_Tata_Open_Maharashtra
+
+All three tournaments began on the last day of 2018 and ended January 5 or January 6th 2019, so for that reason I will treat this data as part of 2019 tournament count. 
+
+Reference for later problems: https://dplyr.tidyverse.org/reference/distinct.html
+https://robjhyndman.com/hyndsight/distinct/
+
+
+### 2a. How many tournaments took place in 2019?
+
+
+```{r}
+atp_data <- read_csv("atp_matches_2019.csv")
+
+tourney_count_2019 <- atp_data %>%
+  select(tourney_id, tourney_name) %>%
+  distinct(tourney_id, tourney_name) %>%          # remove duplicates
+  summarize(num_tournaments = n())                # count unique
+
+tourney_count_2019
+
+```
+There were 128 tournaments in 2019 on the ATP Tour. 
+
+
+### 2b. Did any player win more than one tournament? If so, how many players won more than one tournament, and how many tournaments did the most winning player(s) win?
+
+```{r}
+tournament_winners <- atp_data %>%
+  group_by(tourney_id) %>%
+  filter(round == "F") %>%  # Select only Finals
+  ungroup() %>%
+  count(winner_name, name = "tournaments_won") %>%
+  arrange(desc(tournaments_won))
+
+multiple_winners <- tournament_winners %>%
+  filter(tournaments_won > 1)
+
+multiple_winners
+
+```
+
+So, 12 players won more than 1 tournament in the 2019 ATP Season. The player with the most wins, Dominic Thiem, (lovely 1 hand backhand btw) won 5 tournaments in the 2019 ATP season. 
+
+
+### 2c. Is there any evidence that winners have more aces than losers? (If you address this with a hypothesis test, do not use base R functionality - continue to remain in the Tidyverse.)
+
+
+```{r}
+mean_ace_table <- atp_data %>%
+  summarize(
+    mean_winner_ace = mean(w_ace, na.rm = TRUE),
+    mean_loser_ace  = mean(l_ace, na.rm = TRUE)
+  )
+mean_ace_table
+
+```
+From a preliminary look, on average, winners tend to hit more aces than losers. Let's look at it more rigorously. 
+
+```{r}
+
+# Create ace difference variable
+ace_diffs <- atp_data %>%
+  mutate(ace_diff = w_ace - l_ace) %>%
+  drop_na(ace_diff)
+
+# Compute sample statistics for t-test
+stats <- ace_diffs %>%
+  summarize(
+    n     = n(),
+    meanD = mean(ace_diff),
+    sdD   = sd(ace_diff),
+    seD   = sdD / sqrt(n),
+    t_val = meanD / seD,                
+    p_val = 1 - pt(t_val, df = n - 1) 
+  )
+
+stats
+
+```
+The one-sample t-test for the mean ace difference gave a large t-statistic value and a p-value approximately equal to 0. This provides strong statistical evidence that winners serve more aces than losers in the 2019 ATP tour.
+
+
+
+### 2d. Identify the player(s) with the highest win-rate. (Note that this is NOT asking for the highest number of wins.) Restrict to players with at least 5 matches.
+
+
+
+```{r}
+# Wins per player
+wins <- atp_data %>%
+  count(winner_name, name = "wins")
+
+# Losses per player
+losses <- atp_data %>%
+  count(loser_name, name = "losses")
+
+# Combine Wins and Losses and Compute Win Rate
+player_rates <- full_join(wins, losses,
+                          by = c("winner_name" = "loser_name")) %>%
+  rename(player = winner_name) %>%
+  mutate(
+    matches = wins + losses,
+    win_rate = wins / matches
+  ) %>%
+  filter(matches >= 5) %>%
+  arrange(desc(win_rate))
+
+player_rates
+
+```
+
+Of course the three GOATS: Federer, Djokovic, Nadal have the 3 highest win rates for the 2019 ATP Tour. The player with the **highest** rate is Nadal. 
+
+
+# Question 3
+
+### 3a. How many major and minor spikes in cases were there?
+
+References: 
+1. https://sqlpad.io/tutorial/lag-function-r-comprehensive-guide/
+2. https://dplyr.tidyverse.org/reference/lead-lag.html
+3. https://www.geeksforgeeks.org/r-language/create-lagged-variable-by-group-in-r-dataframe/
+4. https://www.youtube.com/watch?v=uNQ3fwnUQsE
+5. https://ggplot2-book.org/annotations.html
+6. https://stackoverflow.com/questions/44170871/how-does-ggplot-scale-continuous-expand-argument-work
+7. https://stackoverflow.com/questions/10576095/formatting-dates-with-scale-x-date-in-ggplot2
+8. https://r-charts.com/ggplot2/facets/
+
+```{r}
+library(tidyverse)
+library(scales)
+
+cov <- read_csv("us-states.csv", show_col_types = FALSE)
+
+# Within each date, add up the 7-day average number of new cases across all states.
+us_daily <- cov %>%
+  group_by(date) %>%
+  summarize(
+    cases_avg = sum(cases_avg, na.rm = TRUE), .groups = "drop") %>%
+  arrange(date)
+
+# Detect local peaks
+us_peaks <- us_daily %>%
+  mutate(
+    prev_day = lag(cases_avg),
+    next_day = lead(cases_avg),
+    is_peak = cases_avg > prev_day & cases_avg > next_day
+  ) %>%
+  filter(is_peak)
+
+# Classify peaks by percentile thresholds. I choose the top 10% spikes as major and the those above the median as minor. 
+
+major_val <- quantile(us_daily$cases_avg, 0.90, na.rm = TRUE)
+minor_val <- median(us_daily$cases_avg, na.rm = TRUE)
+
+us_peaks <- us_peaks %>%
+  mutate(
+    spike_type = case_when(
+      cases_avg >= major_val ~ "Major spike",
+      cases_avg >= minor_val ~ "Minor spike",
+      TRUE ~ "Small Bump" #make sure any peaks smaller than the median are labeled,      otherwise NA will be returned
+    )
+  )
+
+# I looked up historical peaks and labeled them manually. 
+major_labels <- tibble(
+  date = as.Date(c("2021-01-09", "2022-01-19", "2023-01-01")),
+  label = c("Winter 20/21", "Omicron 2022", "Winter 2023")
+)
+minor_labels <- tibble(
+  date = as.Date(c("2020-07-25", "2021-09-02", "2022-07-23")),
+  label = c("Summer 2020", "Fall 2021", "Summer 2022")
+)
+
+major_labels <- major_labels %>%
+  left_join(us_daily, by = "date")
+minor_labels <- minor_labels %>%
+  left_join(us_daily, by = "date")
+
+
+ggplot(us_daily, aes(x = date, y = cases_avg)) +
+  # curve for national 7-day avg
+  geom_line(color = "black", linewidth = 0.7) +
+
+  # Label detected major and minor spikes
+  geom_point(
+    data = filter(us_peaks, spike_type == "Major spike"),
+    aes(color = spike_type),
+    size = 2.1
+  ) +
+  geom_point(
+    data = filter(us_peaks, spike_type == "Minor spike"),
+    aes(color = spike_type),
+    size = 1.5
+  ) +
+
+  # Add labeled annotations for major/minor waves
+  geom_text(
+    data = major_labels,
+    aes(label = label),
+    nudge_y = 100000, 
+    size = 3.5,
+    color = "darkred",
+    fontface = "bold"
+  ) +
+  geom_text(
+    data = minor_labels,
+    aes(label = label),
+    nudge_y = 100000,
+    angle = 45,
+    size = 3,
+    color = "navy"
+  ) +
+
+  # Format and theme
+  scale_x_date(
+  date_breaks = "1 year",
+  date_labels = "%b %Y")+
+  scale_y_continuous(labels = label_comma()) +
+  scale_color_manual(values = c("Major spike" = "red", "Minor spike" = "blue")) +
+  labs(
+    title = "U.S. COVID-19 Case Spikes",
+    subtitle = paste0(
+      "Major Spikes: ", sum(us_peaks$spike_type == "Major spike"),
+      " | Minor Spikes: ", sum(us_peaks$spike_type == "Minor spike"),
+      "\ \nPeaks classified by Historical Waves (2020–2023)"
+    ),
+    x = "Date",
+    y = "Cases (summed from 7-day average over state counts)",
+    color = ""
+  ) +
+  theme_minimal(base_size = 11) +
+  theme(
+    legend.position = "top",
+    plot.title = element_text(face = "bold", hjust = 0.5),
+    plot.subtitle = element_text(hjust = 0.5)
+  )
+
+
+```
+
+Per my assumptions, there were 7 major spikes and 52 minor spikes. 
+Assumptions I made: 
+1. Adding up the 7-day average case counts is a good estimate of the US count. 
+2. I assumed that if the case average is higher than the day before and the day after, that is a spike. 
+3. I defined major spikes as the 90th percentile of all daily averages and minor spikes as peaks above the median. 
+4. I treated each spike as its own event. 
+
+## Q3b. For the states with the highest and lowest overall rates per population, what differences do you see in their trajectories over time?
+
+```{r}
+
+# Find mean per-capita rate over entire period
+state_rates <- cov %>%
+  filter(state != "American Samoa") %>% 
+  group_by(state) %>%
+  summarize(mean_rate = mean(cases_avg_per_100k, na.rm = TRUE), .groups = "drop") %>%
+  arrange(desc(mean_rate))
+
+top3 <- head(state_rates$state, 3) # top 3 states with the highest mean rate
+bot3 <- tail(state_rates$state, 3) #bottom 3 states
+
+compare_states <- cov %>% 
+  filter(state %in% c(top3, bot3))
+
+ggplot(compare_states,
+       aes(date, cases_avg_per_100k, color = state)) +
+  geom_line(linewidth = 0.6, show.legend = FALSE) +
+  facet_wrap(~ state, ncol = 3, scales = "fixed") +
+  scale_y_continuous(labels = label_comma()) +
+  scale_x_date(date_breaks = "5 months", date_labels = "%b %Y") +
+  labs(
+    title = "States With Highest and Lowest Average COVID-19 Case Rates (per 100,000)",
+    x = "Date",
+    y = "Cases per 100,000 (7-day avg)"
+  ) +
+  theme_minimal(base_size = 11) +
+  theme(
+    strip.text = element_text(face = "bold", color="navy"),
+    plot.title = element_text(face = "bold", hjust = 0.5),
+    plot.subtitle = element_text(hjust = 0.5),
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  )
+
+```
+The figure shows that Alaska, Kentucky and Rhode Island have the highest average daily cases per 100,000 people across the span of the pandemic. On the other hand, Maryland, Oregon and Maine have the lowest per-capita case rates. 
+
+High-rate states have sharp peaks i.e. they experienced intense waves relative to population size whereas low-rate states have flatter curves with lesser magnitude.Notice that Alaska and Kentucky have similar curves. One may speculate that is due to two properties: 
+- similar politics and beliefs about masks
+- Moderate population size with a sizable rural population, which coincides with limited mandates and lower vaccination rates. The waves we see are due to the demographic factors such as cold winters and indoor gatherings which account for the seasonality in peaks. 
+
+Low-rate states display flatter trajectories with smaller waves since they usually enforced stricter quarantine rules or had geographical constraints that limited travel (i.e. for the case of Maine, the density of people is not as high as it is for Maryland but Maryland had strong quarantine and mask compliance). To summarize, states with the highest rate per population, their trajectories are sharp and short-lived which indicates intense and brief outbreaks relative to population size. In contrast, the states with the lowest average rates (Maine, Maryland, and Oregon) have flatter trajectories with smaller, more gradual waves. 
+
+
+### Q3.c 
+Identify, to the best of your ability without a formal test, the first five states to experience COVID in a substantial way.
+
+
+```{r}
+library(plotly)
+
+substantial_limit <- 10 #large enough to rule out isolated/travel cases and small enough to show early community spillover. 
+
+# find first date each state reaches the substantial limit
+firstdate_substantial <- cov %>%
+  filter(!is.na(cases_avg_per_100k),state != "Guam") %>% #Guam isn't a state. 
+  group_by(state) %>%
+  arrange(date) %>%
+  mutate(cumulative_cases_per_100k = cumsum(cases_avg_per_100k)) %>%
+  filter(cumulative_cases_per_100k >= substantial_limit) %>%
+  arrange(date) %>%
+  filter(row_number() == 1) %>% 
+  ungroup() %>%
+  arrange(date) %>%
+  head(5)
+
+cat("First five states to experience COVID in a substantial way are: \n")
+print(firstdate_substantial %>% select(state, date, cumulative_cases_per_100k))
+
+early_states <- firstdate_substantial$state #extract state names
+
+early_state_data <- cov %>%
+  filter(state %in% early_states) %>%
+  group_by(state) %>%
+  arrange(date) %>%
+  mutate(cumulative_cases_per_100k = cumsum(cases_avg_per_100k)) #per-capita measure
+
+p <- plot_ly() %>%
+  add_lines(
+    data = early_state_data,
+    x = ~date, y = ~cumulative_cases_per_100k,
+    color = ~state,
+    line = list(width = 3)
+  ) %>%
+  add_markers(
+    data = firstdate_substantial,
+    x = ~date, y = ~cumulative_cases_per_100k,
+    marker = list(size = 10, symbol = "diamond"),
+    name = paste0("First ≥ ", substantial_limit, " per 100k")
+  ) %>%
+  
+  add_segments(
+    x = min(early_state_data$date),
+    xend = max(early_state_data$date),
+    y = substantial_limit, yend = substantial_limit,
+    line = list(color = "red", dash = "dash"),
+    name = paste0("Threshold (", substantial_limit, "/100k)")) %>%
+  
+  layout(
+    title = list(
+      text = "First five states to be strongly affected by COVID",
+      x = 0.5
+    ),
+    xaxis = list(title = "Date"),
+    yaxis = list(title = "Cumulative cases per 100,000"),
+    hovermode = "x unified",
+    plot_bgcolor = "white",
+    paper_bgcolor = "white"
+  )
+
+p
+
+ 
+```
+
+The 5 states that experienced COVID in a substantial way are DC, Louisiania, New Jersey, New York and Washington.
+
+
