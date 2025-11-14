@@ -1,0 +1,572 @@
+---
+title: "HW5 solutions"
+author: "Deepan"
+format:
+  html:
+    self-contained: true
+editor: visual
+---
+
+
+#Q1a
+
+
+### Define the class
+```{r}
+
+setClass("waldCI", 
+         slots=c(
+           mean = "numeric",
+           sterr = "numeric",
+           lb = "numeric",
+           ub = "numeric", 
+           level = "numeric"))
+```
+
+### Validator
+```{r}
+setValidity("waldCI", function(object) {
+
+  #check all slots have length 1
+  lens <- vapply(
+    list(object@mean,
+         object@sterr,
+         object@lb,
+         object@ub,
+         object@level),
+    length,
+    integer(1)
+  )
+  if (any(lens != 1L)) {
+    stop("All slots of a 'waldCI' must be of length 1.")
+  }
+
+  # ci is between 0 and 1
+  if (object@level <= 0 || object@level >= 1) {
+    stop("Confidence level must be between 0 and 1.")
+  }
+
+  # standard error positive
+  if (object@sterr <= 0) {
+    stop("Standard Error has to be positive.")
+  }
+
+  # upper bound cant be greater than lower bound
+  if (object@lb >= object@ub) {
+    stop("Lower bound can't be greater than upper bound")
+  }
+  
+  return(TRUE)
+})
+
+```
+### Construct the class
+
+```{r}
+
+createWaldCI <- function(level,mean,sterr,lb,ub) {
+
+  if (missing(level)) {
+    stop("'level' must be supplied.")
+  }
+
+  # Either (mean, sterr) OR (lb, ub), but not both
+  has_mean   <- !missing(mean)  && !missing(sterr)
+  has_bounds <- !missing(lb)    && !missing(ub)
+
+  if (has_mean && has_bounds) {
+    stop("Provide either (mean, sterr) or (lb, ub), but not both.")
+  }
+  if (!has_mean && !has_bounds) {
+    stop("You must provide either (mean, sterr) OR (lb, ub).")
+  }
+
+  alpha <- 1 - level
+  z <- qnorm(1 - alpha / 2)
+
+  if (has_mean) {
+    # construct CI from mean & serr
+    lb <- mean - z * sterr
+    ub <- mean + z * sterr
+  } else {
+    # construct mean & serr from bounds
+    mean  <- (lb + ub) / 2
+    sterr <- (ub - lb) / (2 * z)
+  }
+
+  obj <- new("waldCI",
+             mean  = mean,
+             sterr = sterr,
+             lb    = lb,
+             ub    = ub,
+             level = level)
+
+  validObject(obj)
+  return(obj)
+}
+
+```
+
+
+### Show
+
+```{r}
+
+setMethod("show", "waldCI",
+          function(object) {
+            
+            cat(sprintf("Wald CI (level = %.1f%%)\n", 100 * object@level))
+            cat(sprintf("mean = %.4f\n", object@mean))
+            cat(sprintf("se = %.4f\n", object@sterr))
+            cat(sprintf("lower = %.4f\n", object@lb))
+            cat(sprintf("upper = %.4f\n", object@ub))
+          return(invisible(object))
+          })
+```
+
+### Accessors 
+
+```{r}
+#lb
+setGeneric("lb",function(object) standardGeneric("lb"))
+setMethod("lb", "waldCI",function(object) object@lb)
+
+#ub
+setGeneric("ub",function(object) standardGeneric("ub"))
+setMethod("ub", "waldCI",function(object) object@ub)
+
+#sterr
+setGeneric("sterr",function(object) standardGeneric("sterr"))
+setMethod("sterr", "waldCI",function(object) object@sterr)
+
+#level
+setGeneric("level",function(object) standardGeneric("level"))
+setMethod("level", "waldCI",function(object) object@level)
+
+#mean
+setGeneric("mean")
+setMethod("mean", "waldCI",function(x, ...) x@mean)
+
+```
+
+### Setters
+
+We need to recalculate the Wald CI for each change of value. I tried Prof's syntax in lecture and there were some issues in that you could calculate a CI but if you changed the value of some object, the rest of the objects stayed the same. 
+
+```{r}
+#Setters 
+
+#lb
+setGeneric("lb<-", function(object, value) standardGeneric("lb<-"))
+setMethod("lb<-", "waldCI", function(object, value) {
+  object@lb <- value
+  z <- qnorm(1 - (1 - object@level) / 2)
+  object@mean  <- (object@lb + object@ub) / 2
+  object@sterr <- (object@ub - object@lb) / (2 * z)
+  validObject(object)
+  return(object)
+})
+
+#ub
+setGeneric("ub<-", function(object, value) standardGeneric("ub<-"))
+setMethod("ub<-", "waldCI", function(object, value) {
+  object@ub <- value
+  z <- qnorm(1 - (1 - object@level) / 2)
+  object@mean  <- (object@lb + object@ub) / 2
+  object@sterr <- (object@ub - object@lb) / (2 * z)
+  validObject(object)
+  return(object)
+})
+
+#level
+setGeneric("level<-", function(object, value) standardGeneric("level<-"))
+setMethod("level<-", "waldCI",function(object, value) {
+  object@level <- value
+  z <- qnorm(1 - (1 - object@level) / 2)
+  object@lb <- object@mean - z * object@sterr
+  object@ub <- object@mean + z * object@sterr
+  validObject(object)
+  return(object)
+})
+
+#mean
+setGeneric("mean<-",function(object, value) standardGeneric("mean<-"))
+setMethod("mean<-", "waldCI", function(object,value) {
+  object@mean <- value
+  z <- qnorm(1 - (1 - object@level) / 2)
+  object@lb <- object@mean - z * object@sterr
+  object@ub <- object@mean + z * object@sterr
+  validObject(object)
+  return(object)
+})
+
+#sterr
+setGeneric("sterr<-", function(object, value) standardGeneric("sterr<-"))
+setMethod("sterr<-", "waldCI",function(object, value) {
+  object@sterr <- value
+  z <- qnorm(1 - (1 - object@level) / 2)
+  object@lb <- object@mean - z * object@sterr
+  object@ub <- object@mean + z * object@sterr
+  validObject(object)
+  return(object)
+})
+
+```
+### Contains
+```{r}
+setGeneric("contains",function(object, value) standardGeneric("contains"))
+setMethod("contains",signature(object = "waldCI", value = "numeric"),
+          function(object, value) {
+            value >= object@lb & value <= object@ub
+          })
+```
+### Overlap
+
+```{r}
+setGeneric("overlap", function(ci1, ci2) standardGeneric("overlap"))
+setMethod("overlap", signature(ci1 = "waldCI", ci2 = "waldCI"),
+          function(ci1, ci2) {
+            return(ci1@ub >= ci2@lb && ci1@lb <= ci2@ub)
+            })
+```
+
+### As.numeric
+
+```{r}
+setGeneric("as.numeric")
+setMethod("as.numeric", "waldCI",function(x, ...) {
+  return(c(x@lb, x@ub))
+          })
+```
+
+### Transform
+```{r}
+setGeneric("transformCI",function(object, f) standardGeneric("transformCI"))
+
+setMethod("transformCI",signature(object = "waldCI", f = "function"),
+          function(object, f) {
+            test_points <- seq(object@lb, object@ub, length.out = 10)
+            values <- sapply(test_points, f)
+            is_increasing <- all(diff(values) >= -(1e-8))
+            is_decreasing <- all(diff(values) <=  1e-8)
+
+            if (!is_increasing && !is_decreasing) {
+              stop("Function appears non-monotonic over the interval.")
+            }
+
+            new_lb <- f(object@lb)
+            new_ub <- f(object@ub)
+
+            if (is_decreasing) {
+              tmp   <- new_lb
+              new_lb <- new_ub
+              new_ub <- tmp
+            }
+
+            createWaldCI(
+              level = object@level,
+              lb    = new_lb,
+              ub    = new_ub
+            )
+          })
+
+```
+## Q1b 
+```{r}
+
+ci1 <- createWaldCI(level=0.95,lb=17.2,ub=24.7)
+ci2 <- createWaldCI(level=0.99,mean=13,sterr =2.5)
+ci3 <- createWaldCI(level=0.75,lb=27.43,ub=39.22)
+
+ci1
+ci2
+ci3
+
+```
+
+
+```{r}
+ci1
+ci2
+ci3
+as.numeric(ci1)
+as.numeric(ci2)
+as.numeric(ci3)
+lb(ci2)
+ub(ci2)
+mean(ci1)
+sterr(ci3)
+level(ci2)
+lb(ci2) <- 10.5
+mean(ci3) <- 34
+level(ci3) <- .8
+contains(ci1, 17)
+contains(ci3, 44)
+overlap(ci1, ci2)
+eci1 <- transformCI(ci1, sqrt)
+eci1
+mean(transformCI(ci2, log))
+```
+### 1c
+
+When grading please uncomment, it would stop the knitting otherwise. 
+```{r}
+#createWaldCI(level = 0.95, mean = 10, sterr = -2)
+#createWaldCI(level = 0.95, lb = 12, ub = 5)
+#createWaldCI(level = 0.95, lb = -Inf, ub = Inf)
+
+```
+
+
+ Question 3
+
+### 3a. How many major and minor spikes in cases were there?
+
+```{r}
+library(tidyverse)
+library(scales)
+library(plotly)
+
+cov <- read_csv("us-states.csv", show_col_types = FALSE)
+
+# Within each date, add up the 7-day average number of new cases across all states.
+us_daily <- cov %>%
+  group_by(date) %>%
+  summarize(
+    cases_avg = sum(cases_avg, na.rm = TRUE), .groups = "drop") %>%
+  arrange(date)
+
+# Detect local peaks
+us_peaks <- us_daily %>%
+  mutate(
+    prev_day = lag(cases_avg),
+    next_day = lead(cases_avg),
+    is_peak = cases_avg > prev_day & cases_avg > next_day
+  ) %>%
+  filter(is_peak)
+
+# Classify peaks by percentile thresholds. I choose the top 10% spikes as major and the those above the median as minor. 
+
+major_val <- quantile(us_daily$cases_avg, 0.90, na.rm = TRUE)
+minor_val <- median(us_daily$cases_avg, na.rm = TRUE)
+
+us_peaks <- us_peaks %>%
+  mutate(
+    spike_type = case_when(
+      cases_avg >= major_val ~ "Major spike",
+      cases_avg >= minor_val ~ "Minor spike",
+      TRUE ~ "Small Bump" #make sure any peaks smaller than the median are labeled, otherwise NA will be returned
+    )
+  )
+
+# I looked up historical peaks and labeled them manually. 
+major_labels <- tibble(
+  date = as.Date(c("2021-01-09", "2022-01-19", "2023-01-01")),
+  label = c("Winter 20/21", "Omicron 2022", "Winter 2023")
+)
+minor_labels <- tibble(
+  date = as.Date(c("2020-07-25", "2021-09-02", "2022-07-23")),
+  label = c("Summer 2020", "Fall 2021", "Summer 2022")
+)
+
+major_labels <- major_labels %>%
+  left_join(us_daily, by = "date")
+minor_labels <- minor_labels %>%
+  left_join(us_daily, by = "date")
+
+g <- ggplot(us_daily, aes(x = date, y = cases_avg)) +
+  # curve for national 7-day avg
+  geom_line(color = "black", linewidth = 0.7) +
+
+  # Label detected major and minor spikes
+  geom_point(
+    data = filter(us_peaks, spike_type == "Major spike"),
+    aes(color = spike_type),
+    size = 2.1
+  ) +
+  geom_point(
+    data = filter(us_peaks, spike_type == "Minor spike"),
+    aes(color = spike_type),
+    size = 1.5
+  ) +
+
+  # Add labeled annotations for major/minor waves
+  geom_text(
+    data = major_labels,
+    aes(label = label),
+    nudge_y = 100000, 
+    size = 3.5,
+    color = "darkred",
+    fontface = "bold"
+  ) +
+  geom_text(
+    data = minor_labels,
+    aes(label = label),
+    nudge_y = 100000,
+    angle = 45,
+    size = 3,
+    color = "navy"
+  ) +
+
+  # Format and theme
+  scale_x_date(
+    date_breaks = "1 year",
+    date_labels = "%b %Y"
+  ) +
+  scale_y_continuous(labels = label_comma()) +
+  scale_color_manual(values = c("Major spike" = "red", "Minor spike" = "blue")) +
+  labs(
+    title = "U.S. COVID-19 Case Spikes",
+    subtitle = paste0(
+      "Major Spikes: ", sum(us_peaks$spike_type == "Major spike"),
+      " | Minor Spikes: ", sum(us_peaks$spike_type == "Minor spike"),
+      " \nPeaks classified by Historical Waves (2020–2023)"
+    ),
+    x = "Date",
+    y = "Cases (summed from 7-day average over state counts)",
+    color = ""
+  ) +
+  theme_minimal(base_size = 11) +
+  theme(
+    legend.position = "top",
+    plot.title = element_text(face = "bold", hjust = 0.5),
+    plot.subtitle = element_text(hjust = 0.5)
+  )
+
+ggplotly(g)
+
+```
+
+
+Per my assumptions, there were 7 major spikes and 52 minor spikes. 
+Assumptions I made: 
+1. Adding up the 7-day average case counts is a good estimate of the US count. 
+2. I assumed that if the case average is higher than the day before and the day after, that is a spike. 
+3. I defined major spikes as the 90th percentile of all daily averages and minor spikes as peaks above the median. 
+4. I treated each spike as its own event. 
+
+
+### Q3b. 
+
+```{r}
+library(tidyverse)
+library(scales)
+library(plotly)
+
+# Find mean per-capita rate over entire period
+state_rates <- cov %>%
+  filter(state != "American Samoa") %>% 
+  group_by(state) %>%
+  summarize(mean_rate = mean(cases_avg_per_100k, na.rm = TRUE), .groups = "drop") %>%
+  arrange(desc(mean_rate))
+
+top3 <- head(state_rates$state, 3) # top 3 states with the highest mean rate
+bot3 <- tail(state_rates$state, 3) # bottom 3 states
+
+compare_states <- cov %>% 
+  filter(state %in% c(top3, bot3))
+
+g <- ggplot(compare_states,
+       aes(date, cases_avg_per_100k, color = state)) +
+  geom_line(linewidth = 0.6, show.legend = FALSE) +
+  facet_wrap(~ state, ncol = 3, scales = "fixed") +
+  scale_y_continuous(labels = label_comma()) +
+  scale_x_date(date_breaks = "5 months", date_labels = "%b %Y") +
+  labs(
+    title = "States With Highest and Lowest Average COVID-19 Case Rates (per 100,000)",
+    x = "Date",
+    y = "Cases per 100,000 (7-day avg)"
+  ) +
+  theme_minimal(base_size = 11) +
+  theme(
+    strip.text = element_text(face = "bold", color = "navy"),
+    plot.title = element_text(face = "bold", hjust = 0.5),
+    plot.subtitle = element_text(hjust = 0.5),
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  )
+
+ggplotly(g)
+
+```
+
+
+The figure shows that Alaska, Kentucky and Rhode Island have the highest average daily cases per 100,000 people across the span of the pandemic. On the other hand, Maryland, Oregon and Maine have the lowest per-capita case rates. 
+
+High-rate states have sharp peaks i.e. they experienced intense waves relative to population size whereas low-rate states have flatter curves with lesser magnitude.Notice that Alaska and Kentucky have similar curves. One may speculate that is due to two properties: 
+- similar politics and beliefs about masks
+- Moderate population size with a sizable rural population, which coincides with limited mandates and lower vaccination rates. The waves we see are due to the demographic factors such as cold winters and indoor gatherings which account for the seasonality in peaks. 
+
+Low-rate states display flatter trajectories with smaller waves since they usually enforced stricter quarantine rules or had geographical constraints that limited travel (i.e. for the case of Maine, the density of people is not as high as it is for Maryland but Maryland had strong quarantine and mask compliance). To summarize, states with the highest rate per population, their trajectories are sharp and short-lived which indicates intense and brief outbreaks relative to population size. In contrast, the states with the lowest average rates (Maine, Maryland, and Oregon) have flatter trajectories with smaller, more gradual waves. 
+
+
+### Q3.c 
+Identify, to the best of your ability without a formal test, the first five states to experience COVID in a substantial way.
+
+
+```{r}
+library(plotly)
+
+substantial_limit <- 10 #large enough to rule out isolated/travel cases and small enough to show early community spillover. 
+
+# find first date each state reaches the substantial limit
+firstdate_substantial <- cov %>%
+  filter(!is.na(cases_avg_per_100k),state != "Guam") %>% #Guam isn't a state. 
+  group_by(state) %>%
+  arrange(date) %>%
+  mutate(cumulative_cases_per_100k = cumsum(cases_avg_per_100k)) %>%
+  filter(cumulative_cases_per_100k >= substantial_limit) %>%
+  arrange(date) %>%
+  filter(row_number() == 1) %>% 
+  ungroup() %>%
+  arrange(date) %>%
+  head(5)
+
+cat("First five states to experience COVID in a substantial way are: \n")
+print(firstdate_substantial %>% select(state, date, cumulative_cases_per_100k))
+
+early_states <- firstdate_substantial$state #extract state names
+
+early_state_data <- cov %>%
+  filter(state %in% early_states) %>%
+  group_by(state) %>%
+  arrange(date) %>%
+  mutate(cumulative_cases_per_100k = cumsum(cases_avg_per_100k)) #per-capita measure
+
+p <- plot_ly() %>%
+  add_lines(
+    data = early_state_data,
+    x = ~date, y = ~cumulative_cases_per_100k,
+    color = ~state,
+    line = list(width = 3)
+  ) %>%
+  add_markers(
+    data = firstdate_substantial,
+    x = ~date, y = ~cumulative_cases_per_100k,
+    marker = list(size = 10, symbol = "diamond"),
+    name = paste0("First ≥ ", substantial_limit, " per 100k")
+  ) %>%
+  
+  add_segments(
+    x = min(early_state_data$date),
+    xend = max(early_state_data$date),
+    y = substantial_limit, yend = substantial_limit,
+    line = list(color = "red", dash = "dash"),
+    name = paste0("Threshold (", substantial_limit, "/100k)")) %>%
+  
+  layout(
+    title = list(
+      text = "First five states to be strongly affected by COVID",
+      x = 0.5
+    ),
+    xaxis = list(title = "Date"),
+    yaxis = list(title = "Cumulative cases per 100,000"),
+    hovermode = "x unified",
+    plot_bgcolor = "white",
+    paper_bgcolor = "white"
+  )
+
+p
+ 
+```
+
+
