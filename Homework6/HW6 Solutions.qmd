@@ -1,0 +1,557 @@
+---
+title: "HW 6 Solutions"
+author: "Deepan"
+format:
+  html:
+    self-contained: true
+---
+
+### Problem 1: Rcpp
+
+```{r}
+library(Rcpp)
+
+sourceCpp(code = "
+#include <Rcpp.h>
+#include <cmath>
+using namespace Rcpp;
+ 
+ /*
+ * C_moment: Compute the k-th central moment: mean((x - mean(x))^k)
+ * equivalent to e1071::moment(x, order = k, center = TRUE, absolute = FALSE)
+ *
+ * @param v    Numeric vector
+ * @param k    Order of the moment
+ * @return     k-th central moment as a double
+ */
+
+// [[Rcpp::export]]
+
+double C_moment(NumericVector v, int k) {
+  int n = v.length();
+  
+  // 1. Calculate the mean from the mean template.
+
+  double sum = 0;
+  for (int i = 0; i < n; ++i){
+    sum += v[i];
+  }
+  double mean = sum / n;
+  
+  // 2.Calculate the kth central moment
+  
+  double moment_sum = 0;
+  for (int i = 0; i < n; ++i){
+    // Calculate (x_i - mean)^k
+    moment_sum += std::pow(v[i] - mean, k);
+  }
+  
+  // Return the average
+  return(moment_sum / n);
+}")
+
+```
+
+```{r}
+library(e1071)
+
+# Generate numeric vector with 1000 elements (should be long enough)
+set.seed(506)
+x <- rnorm(1000)
+
+# Compare C_moment to e1071_moment
+
+for (k in 1:4) {
+  cat("\nOrder k =", k, "\n")
+  
+  cm_cpp   <- C_moment(x, k)
+  cm_e1071 <- moment(x, order = k, center = TRUE, absolute = FALSE)
+  
+  cat("C_moment:      ", cm_cpp,   "\n")
+  cat("e1071::moment: ", cm_e1071, "\n")
+  cat("all.equal? ->  ", all.equal(cm_cpp, cm_e1071), "\n")
+}
+
+```
+### Problem 2: Expanding on waldCI
+
+### 2a. 
+
+```{r}
+library(parallel)
+
+# Load waldCI class
+source("waldCI.R")
+
+# 1. Class Definition
+
+#' Bootstrap Wald CI Function to set class
+#' Inherits from waldCI with slots for data, the statistic, bootstrap repetitions and computations
+#'
+#' @slot data The dataset used for the bootstrap (vector, matrix, or data.frame)
+#' @slot fun A function that takes dataset and returns a scalar
+#' @slot reps Number of bootstrap repetitions
+#' @slot compute Character string for either serial or parallel. 
+
+setClass("bootstrapWaldCI",
+         contains = "waldCI",
+         slots = c(
+           data    = "ANY",
+           fun     = "function",
+           reps    = "numeric",
+           compute = "character"
+         ))
+```
+
+```{r}
+#' function for bootstrap resample and statistic computation.
+#' @param fun: function that maps data to scalar
+#' @param data: dataset
+#' @return Numeric scalar
+
+.bootstrap_once <- function(fun, data) {
+  if (is.data.frame(data) || is.matrix(data)) {
+    n <- nrow(data)
+    idx <- sample.int(n, n, replace = TRUE)
+    boot_dat <- data[idx, , drop = FALSE]
+  } else {
+    n <- length(data)
+    idx <- sample.int(n, n, replace = TRUE)
+    boot_dat <- data[idx]
+  }
+  return(fun(boot_dat))
+}
+
+```
+
+```{r}
+#' function to run bootstrap in serial or parallel
+#' @param fun: function that maps data to a scalar
+#' @param data: Dataset
+#' @param reps: number of repetitons in bootstrap
+#' @param choose serial or parallel
+#' @return list with elements (mean) & (sterr)
+
+
+.bootstrap_stats <- function(fun, data, reps, compute = "serial") {
+  if (!compute %in% c("serial", "parallel")) {
+    stop("compute must be either 'serial' or 'parallel'")
+}
+  reps <- as.integer(reps) #force reps to be integer
+  if (reps <= 0L){
+    stop("reps must be a positive integer")
+  } 
+
+  # Serial version
+  if (compute == "serial") {
+    vals <- numeric(reps)
+    for (b in seq_len(reps)) {
+      vals[b] <- .bootstrap_once(fun, data)
+    }
+    return(list(mean = mean(vals), sterr = sd(vals)))
+  }
+
+  # parallel version 
+  
+  cores <- 4
+  
+  if (.Platform$OS.type=="windows"){ #PSOCK
+    cl <- makeCluster(cores)
+    clusterExport(cl, varlist = c("data", "fun", ".bootstrap_once"), envir = environment())
+    
+    vals <- parSapply(cl, X = seq_len(reps),
+                      FUN = function(i) .bootstrap_once(fun,data))
+    stopCluster(cl)
+  }
+  else 
+    { # forking 
+    vals <- unlist(mclapply(seq_len(reps), function(i) .bootstrap_once(fun,data),mc.cores = cores)
+    )
+  }
+
+  list(mean = mean(vals), sterr = sd(vals))
+}
+```
+
+### Constructor
+```{r}
+##' Create a bootstrapWaldCI object
+##' 
+##' @param fun Function maps data from vector to scalar
+##' @param data Dataset 
+##' @param reps repetitons for bootstrap
+##' @param level confidence level
+##' @param compute serial or parallel
+##' @return A bootstrapWaldCI object
+
+makeBootstrapCI <- function(fun,
+                            data,
+                            reps    = 100L,
+                            level   = 0.95,
+                            compute = "serial") {
+
+  stopifnot(is.function(fun))
+
+  stats <- .bootstrap_stats(fun, data, reps, compute)
+
+  obj <- new("bootstrapWaldCI",
+             level   = level,
+             mean    = stats$mean,
+             sterr   = stats$sterr,
+             data    = data,
+             fun     = fun,
+             reps    = as.integer(reps),
+             compute = compute)
+
+  validObject(obj)
+  obj
+}
+
+```
+
+
+```{r}
+#' Recalculate bootstrap statistics
+#'
+#' @param object An object of class bootstrapWaldCI containing the original
+#'   bootstrap configuration.
+#' @return A new bootstrapWaldCI object with updated bootstrap statistics
+#'   (mean and standard error) based on fresh resampling.
+
+
+setGeneric("rebootstrap", function(object) {
+  standardGeneric("rebootstrap")
+})
+
+setMethod("rebootstrap", "bootstrapWaldCI", function(object) {
+  stats <- .bootstrap_stats(object@fun,
+                       object@data,
+                       object@reps,
+                       object@compute)
+
+  new_obj <- new("bootstrapWaldCI",
+                 level   = object@level,
+                 mean    = stats$mean,
+                 sterr   = stats$sterr,
+                 data    = object@data,
+                 fun     = object@fun,
+                 reps    = object@reps,
+                 compute = object@compute)
+
+  validObject(new_obj)
+  new_obj
+  
+})
+```
+### 2b
+
+```{r}
+ci1 <- makeBootstrapCI(function(x) mean(x$y),
+                       ggplot2::diamonds,
+                       reps = 1000)
+ci1
+rebootstrap(ci1)
+```
+```{r}
+set.seed(506)
+
+# Serial bootstrap
+system.time(
+  ci_serial <- makeBootstrapCI(
+    fun     = function(x) mean(x$y),
+    data    = ggplot2::diamonds,
+    reps    = 1000,
+    compute = "serial"
+  )
+)
+
+# Parallel bootstrap
+system.time(
+  ci_parallel <- makeBootstrapCI(
+    fun     = function(x) mean(x$y),
+    data    = ggplot2::diamonds,
+    reps    = 1000,
+    compute = "parallel"
+  )
+)
+
+
+```
+For 1000 bootstrap repetitions on the diamonds dataset, the serial version took 4.45 seconds, while the parallel version took 11.43 seconds, making parallel about 2.5× slower. This is expected on Windows since parallel execution uses PSOCK clusters, which introduces large overhead. Since each bootstrap replicate computes a simple statistic (a mean), the overhead dominates the actual computation time. For statistics that aren't computationally taxing and medium number of replications, serial is faster. Parallel should be used for more demanding statistics or extremely large numbers of bootstrap repetitions. 
+
+### 2c. 
+
+```{r}
+#' Extract the coefficient of `disp` from a linear model
+#' @param dat takes data for bootstrap
+#' @return A numeric scalar giving the estimated coefficient on
+#' disp from the fitted linear model.
+
+dispCoef <- function(dat) {
+  fit <- lm(mpg ~ cyl + disp + wt, data = dat)
+  unname(coef(fit)["disp"])
+}
+
+```
+
+```{r}
+ci2 <- makeBootstrapCI(dispCoef,
+                       mtcars,
+                       reps = 1000)
+ci2
+rebootstrap(ci2)
+```
+```{r}
+system.time(
+  ci2_serial <- makeBootstrapCI(
+    fun     = dispCoef,
+    data    = mtcars,
+    reps    = 1000,
+    compute = "serial"
+  )
+)
+
+system.time(
+  ci2_parallel <- makeBootstrapCI(
+    fun     = dispCoef,
+    data    = mtcars,
+    reps    = 1000,
+    compute = "parallel"
+  )
+)
+
+```
+The serial version took approximately 0.61 seconds, while the parallel version took 0.73 seconds, making parallel slightly slower on my Windows desktop. This behavior makes sense, fitting a small linear model to the mtcars dataset is not computationally taxing and the overhead due to PSOCK outweighs any computational benefit. 
+As discussed before, parallelization is only worth for more computationally taxing statistics or large numbers of bootstrap repetitions.  
+
+### Question 3
+
+### 3a. 
+
+```{r}
+library(dplyr)
+library(lme4)
+library(ggplot2)
+library(purrr)
+
+source("simData.R")
+
+df_std <- df %>%
+  group_by(country) %>%
+  mutate(
+    prior_gpa_std = scale(prior_gpa)[,1],
+    forum_posts_std = scale(forum_posts)[,1],
+    quiz_attempts_std = scale(quiz_attempts)[,1]
+  ) %>%
+  ungroup()
+
+countries <- unique(df_std$country)
+
+fit_model_for_country <- function(ctry) {
+  data_ctry <- df_std %>% filter(country == ctry)
+
+  t <- system.time({
+    fit <- glmer(completed_course ~ prior_gpa_std + forum_posts_std + quiz_attempts_std + (1 | device_type), data = data_ctry,family = binomial)
+    })
+
+  list(country = ctry, fit = fit, time = t) }
+
+results <- map(countries, fit_model_for_country)
+
+coef_df <- map_df(results, function(res) {
+  data.frame(country = res$country,
+    forum_posts_coef = fixef(res$fit)["forum_posts_std"]
+  )
+})
+
+ggplot(coef_df, aes(x = forum_posts_coef, y = country)) +
+  geom_point(size = 3) +
+  geom_vline(xintercept = 0, linetype = "dashed") +
+  theme_bw() +
+  labs(
+    title = "Estimated Coefficients from Mixed Logistic Regression",
+    x = "Coefficients",
+    y = "Country"
+  )
+
+times_df <- map_df(results, function(res) {
+  data.frame(
+    country = res$country,
+    user    = res$time["user.self"],
+    system  = res$time["sys.self"],
+    elapsed = res$time["elapsed"]
+  )
+})
+
+times_df
+```
+### q3b. 
+
+```{r}
+library(dplyr)
+library(lme4)
+library(parallel)
+
+country_list <- split(df_std, df_std$country)
+
+#' Fit model and return only forum_posts_std coefficient
+#' @param dat A data frame for a single country
+#' @return the fixed-effect coefficient for forum_posts_std.
+
+fit_forum_coef <- function(dat) {
+  fit <- glmer(completed_course ~ prior_gpa_std + forum_posts_std + quiz_attempts_std + (1 | device_type), data   = dat, family = binomial)
+  unname(fixef(fit)["forum_posts_std"])
+}
+
+t_parallel <- system.time({
+
+  cores <- 15
+
+  if (.Platform$OS.type == "windows") {
+    # PSOCK cluster on Windows
+    cl <- makeCluster(cores)
+    # load lme4
+    clusterEvalQ(cl, library(lme4))
+    clusterExport(cl, varlist = c("fit_forum_coef"), envir = environment())
+
+    forum_list <- parLapply(cl, country_list, fit_forum_coef)
+    stopCluster(cl)
+
+    forum_vec <- unlist(forum_list)
+
+  } else { #if on mac
+    forum_vec <- unlist(
+      mclapply(country_list, fit_forum_coef, mc.cores = cores)
+    )
+  }
+
+  coef_df_fast <- data.frame(
+    country          = names(forum_vec),
+    forum_posts_coef = as.numeric(forum_vec),
+    row.names        = NULL
+  )
+})
+
+t_parallel   # total runtime for parallel
+
+# Check that results match part a
+compare_df <- merge(
+  coef_df,
+  coef_df_fast,
+  by = "country",
+  suffixes = c("_a", "_fast")
+)
+
+compare_df$diff <- compare_df$forum_posts_coef_a - compare_df$forum_posts_coef_fast
+
+max(abs(compare_df$diff)) 
+
+all.equal(
+  compare_df$forum_posts_coef_a,
+  compare_df$forum_posts_coef_fast
+)
+
+compare_df
+
+
+```
+
+I fit six separate mixed-effects logistic regression models (one per country) of the formula: completed_course ~ prior_gpa_std + forum_posts_std + quiz_attempts_std + (1 | device_type). Predictors were standardized within each country before model fitting. The total elapsed time required to fit all six models in Part (A) was approximately 950 seconds (about 16 minutes). 
+
+To reduce runtime, I did the following: 
+- 1. only keep the variables needed for the model
+- 2. Split the dataset into countries once
+- 3. fit the six models through parallelization 
+
+### Q4
+
+a. How many tournaments took place in 2019?
+
+b. Did any player win more than one tournament? If so, how many players won more than one tournament, and how many tournaments did the most winning player(s) win?
+
+c. Is there any evidence that winners have more aces than losers? (If you address this with a hypothesis test, do not use base R functionality - continue to remain in the Tidyverse.)
+
+d. Identify the player(s) with the highest win-rate. (Note that this is NOT asking for the highest number of wins.) Restrict to players with at least 5 matches.
+
+
+```{r}
+library(data.table)
+tennis <- fread("atp_matches_2019.csv")
+
+```
+
+### a 
+```{r}
+library(data.table)
+
+tourneys <- tennis[, .(tourney_name)]
+tourneys <- unique(tourneys)
+
+tourneys[, tourney_name := sub("Davis.*", "Davis Cup", tourney_name)]
+
+tourneys <- unique(tourneys, by = "tourney_name")
+
+nrow(tourneys)
+
+```
+
+### b 
+
+```{r}
+
+setorder(tennis, tourney_name, -match_num)
+finals <- tennis[, .SD[1], by = tourney_name]
+
+multiwinners <- finals[,.(wins = .N),by = winner_name][wins > 1][order(-wins)]
+
+multiwinners          
+nrow(multiwinners)    
+multiwinners[1:2]   
+
+```
+
+### c
+
+```{r}
+
+tennis[, win_more := fifelse(w_ace > l_ace, TRUE, FALSE, na = NA)]
+
+num_win_more <- tennis[, sum(win_more, na.rm = TRUE)]
+total <- tennis[, sum(!is.na(win_more))]
+prop <- num_win_more / total
+
+ace_test <- binom.test(num_win_more, total, p = 0.5)
+
+cat("Wins w/ more aces:", num_win_more, "\n")
+cat("Total:", total, "\n")
+cat("Proportion:", round(prop, 4), "\n")
+cat("p-value:", format(ace_test$p.value, scientific = TRUE), "\n")
+cat("\n yes winners hit more aces.")
+
+```
+
+### d
+
+```{r}
+
+long <- rbindlist(list(
+  tennis[, .(player = winner_name, winner = TRUE)],
+  tennis[, .(player = loser_name,  winner = FALSE)]))
+
+# Compute matches + winrate per player
+player_stats <- long[, .(matches = .N, winrate = mean(winner)),
+  by = player]
+
+# Restrict to players with > 5 matches and sort by winrate
+top_players <- player_stats[matches > 5][order(-winrate)][1:2]
+top_players
+
+```
+
+Nadal. 
+
+
+
+
+
+
