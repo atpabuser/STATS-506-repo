@@ -1,0 +1,910 @@
+---
+title: "EbolaSIR_Rproject"
+format: pdf
+editor: visual
+knitr:
+  opts_chunk:
+    fig.path: "Images/"
+    dev: "jpeg"
+
+execute:
+  echo: false
+---
+
+```{r}
+library(outbreaks)
+library(dplyr)
+library(tidyr)
+library(lubridate)
+library(ggplot2)
+library(pomp)
+library(visdat)
+library(inspectdf)
+library(patchwork)
+```
+
+```{r}
+#2014 estimate for total population of sierra leone
+N_pop <- 7e6
+image_file_path <- file.path("C:/Users/hyperion/Desktop/STATS-506-repo/Final Project/Images")
+```
+
+# EDA
+
+### Load and visulize the data (ebola_sierraleone_2014)
+
+### check for missing data
+
+```{r}
+head(ebola_sierraleone_2014)
+vis_dat(ebola_sierraleone_2014)
+```
+
+From this figure, we can see sex and age are missing for some cases.
+
+```{r}
+show_plot(inspect_cat(ebola_sierraleone_2014))
+``` 
+The above figure shows distribution across districts, sex and status.
+
+```{r}
+#grouping for rare categories
+RARE_THRESHOLD <- 0.01 # 1% of the columns total observations
+
+bar_chart_data <- ebola_sierraleone_2014 %>%
+  select(where(is.character) | where(is.factor) | where(is.logical)) %>%
+  
+  pivot_longer(
+    cols = everything(),
+    names_to = "column_name",
+    values_to = "value"
+  ) %>%
+  # handling missing values
+  mutate(value = coalesce(as.character(value), "NA (Missing)")) %>%
+  # counts and proportions for all levels
+  group_by(column_name, value) %>%
+  summarise(n = n(), .groups = 'drop_last') %>%
+  mutate(
+    prop = n / sum(n),
+    # Create value_grouped cat for rare obs
+    value_grouped = ifelse(prop < RARE_THRESHOLD, "Other", value)
+  ) %>%
+  ungroup() %>%
+  # Recalculate counts and proportions for the new grouped levels
+  group_by(column_name, value_grouped) %>%
+  summarise(
+    n_final = sum(n),
+    .groups = 'drop_last'
+  ) %>%
+  mutate(
+    prop_final = n_final / sum(n_final),
+    # Order the levels
+    value_grouped = factor(value_grouped, levels = c(
+      sort(unique(value_grouped[value_grouped != "Other"])),
+      "Other"
+    ))
+  ) %>%
+  ungroup()
+
+# Create bar plot
+p1 <- ggplot(bar_chart_data, aes(x = reorder(value_grouped, prop_final), y = prop_final, fill = value_grouped)) +
+  geom_col(show.legend = FALSE) + 
+  facet_wrap(~ column_name, scales = "free_y", ncol = 2) +
+  coord_flip()+
+  scale_y_continuous(labels = scales::percent) + 
+  theme_minimal(base_size = 12) +
+  labs(
+    title = "Distribution of Top Categorical Levels (Ebola Sierra Leone 2014)",
+    subtitle = paste0("Levels accounting for less than ", RARE_THRESHOLD * 100, "% are grouped into 'Other'"),
+    x = NULL, 
+    y = "Proportion of Total Observations"
+  ) +
+  theme(
+    panel.grid.minor = element_blank(),
+    panel.grid.major.y = element_blank(),
+    strip.text = element_text(face = "bold")
+  )
+p1
+
+```
+
+### Data cleaning for POMP
+
+```{r}
+ebola_data <- ebola_sierraleone_2014
+ebola_cleaned <- ebola_data %>%
+  filter(status == "confirmed") %>%
+  select(date = date_of_onset) %>%
+  # Remove rows with missing onset dates
+  filter(!is.na(date)) %>%
+  # Change the date column to Date format
+  mutate(date = as_date(date))
+head(ebola_cleaned)
+```
+
+POMP requires cts data, going to group daily cases by week and sum.
+
+```{r}
+ebola_wkly_data <- ebola_cleaned %>%
+  mutate(week_start = floor_date(date, unit = "week", week_start = 7)) %>%
+  group_by(week_start) %>%
+  summarise(
+    confirm_cases = n()
+  ) %>%
+  ungroup()
+  
+head(ebola_wkly_data)
+```
+
+Let's make the data ready for pomp. Create the time series data. 
+
+```{r}
+first_week <- min(ebola_wkly_data$week_start)
+last_week <- max(ebola_wkly_data$week_start)
+weeks <- seq(from = first_week, to = last_week, by = "week")  
+# Join with ebola_wkly
+ebola_timeseries <- data.frame(week_start = weeks) %>%
+  left_join(ebola_wkly_data, by = "week_start") %>%
+  mutate(
+    cases = tidyr::replace_na(confirm_cases, 0),
+    time = as.integer(difftime(week_start, first_week, units = "weeks")) + 1
+  ) %>%
+  select(time, cases )
+str(ebola_timeseries)
+
+```
+# Build Stochastic SIR POMP
+
+## Stochastic SIR POMP Model
+
+We model the transmission dynamics of the 2014 Ebola outbreak in Sierra Leone using a **stochastic SIR partially observed Markov process (POMP)**. The latent epidemic process is represented by a stochastic SIR model with binomial transition dynamics, while the observation process links the latent epidemic states to reported case counts through a Negative Binomial distribution to account for reporting noise and overdispersion.
+
+The population is divided into epidemiological compartments, and the compartment counts form the latent state vector $X_t$. The model is formulated in discrete time with weekly resolution and is implemented using the `pomp` package in R.
+
+## Transmission and Recovery Rates
+
+The SIR model is governed by two key epidemiological rates:
+
+- $\beta_t$: the **time-varying transmission rate**, which controls how frequently infectious individuals transmit infection to susceptible individuals.
+- $\gamma$: the **recovery rate**, which determines the rate at which infectious individuals recover or are removed from the infectious compartment.
+
+From these quantities, we compute the **effective reproduction number**
+$\mathcal R_t = \beta_t / \gamma$.
+This quantity is the number of people in a population who can be infected by an individual at a specific time. When $\mathcal R_t > 1$, each infectious individual generates more than one secondary infection on average and the epidemic tends to grow. When $\mathcal R_t < 1$, transmission is insufficient to sustain epidemic growth and case counts tend to decline. In this framework, $\mathcal R_t$ reflects changes in transmission intensity due to behavioral responses and public health interventions rather than depletion of the susceptible population.
+
+## State Variables and Time Step
+
+Let $N$ denote the total population size. At time $t$, let:
+
+- $S_t$ denote the number of susceptible individuals,
+- $I_t$ denote the number of infectious individuals (prevalence),
+- $R_t$ denote the number of recovered or removed individuals.
+
+In addition, we define $C_t$ as the **incidence**, representing the number of new infections occurring during week $t$.
+
+The latent state vector is therefore
+$X_t = \{S_t, I_t, R_t, C_t, \log \beta_t\}$.
+
+Time is discretized into weekly intervals with step size $\Delta t = 1$ week.
+
+## Process Model Specification
+
+### Infection Flow ($S \to I$)
+
+Let $N_{SI,t}$ denote the number of susceptible individuals who become infected during the interval $(t, t+\Delta t]$. New infections are modeled probabilistically as
+$N_{SI,t} \sim \text{Binomial}(S_t, p_{SI,t})$,
+where $p_{SI,t}$ is the probability that a susceptible individual becomes infected during the time step.
+
+The infection probability is derived from the per-capita force of infection,
+$\lambda_t = \beta_t \frac{I_t}{N}$,
+yielding
+$p_{SI,t} = 1 - \exp(-\lambda_t \Delta t)
+          = 1 - \exp\!\left(-\beta_t \frac{I_t}{N}\right)$,
+since $\Delta t = 1$.
+
+Weekly incidence is recorded as
+$C_{t+1} = N_{SI,t}$.
+
+
+### Recovery Flow ($I \to R$)
+
+Let $N_{IR,t}$ denote the number of infectious individuals who recover during the interval $(t, t+\Delta t]$. Recoveries are modeled as
+$N_{IR,t} \sim \text{Binomial}(I_t, p_{IR})$,
+where the probability of recovery is derived from the recovery rate,
+$p_{IR} = 1 - \exp(-\gamma \Delta t)$.
+
+
+### State Update Equations
+
+The compartment sizes evolve according to
+$S_{t+1} = S_t - N_{SI,t}$,  
+$I_{t+1} = I_t + N_{SI,t} - N_{IR,t}$,  
+$R_{t+1} = R_t + N_{IR,t}$.
+
+Stochasticity in the process model arises from these discrete infection and recovery events, reflecting intrinsic demographic variability in disease transmission.
+
+## Time-Varying Transmission
+
+We allow the transmission rate $\beta_t$ to evolve over time. Specifically, $\beta_t$ follows a random walk on the log scale,
+$\log \beta_{t+1} = \log \beta_t + \eta_t$,  
+where $\eta_t \sim \text{Normal}(0, \sigma_{\text{proc}}^2)$.
+
+This formulation ensures that $\beta_t$ remains positive while reflecting more realistic transmission dynamics due to events such as Operation Octopus. The time-varying transmission rate is treated as part of the latent state vector and is estimated jointly with the compartment sizes using particle filtering.
+
+
+## Observation Model
+
+Observed weekly Ebola case counts correspond to incidence, not prevalence. Let $Y_{t+1}$ denote the number of reported cases during week $t+1$. The observation process is modeled using a Negative Binomial distribution,
+$Y_{t+1} \sim \text{NegBinomial}(\mu_{t+1}, k)$,
+with mean
+$\mu_{t+1} = \rho \, C_{t+1}$.
+
+Here, $\rho \in (0,1)$ denotes the reporting fraction, representing the expected proportion of true infections that are reported, and $k > 0$ is a dispersion parameter allowing for overdispersion relative to a Poisson observation model.
+
+## Stochastic Process Implementation
+
+The stochastic SIR process and observation model are implemented in `pomp` using `rprocess` and `dmeasure` Csnippets. These components define the binomial infection and recovery transitions, the random walk evolution of $\log \beta_t$, and the Negative Binomial measurement model. The full latent state vector used in the POMP specification is
+$X_t = \{S_t, I_t, R_t, C_t, \log \beta_t\}$.
+
+The following csnippet functions define the structure of the POMP object.
+
+$X_t$ = {S,I,R, C, log$\beta$}.
+
+```{r}
+rproc <- Csnippet("
+
+  // random walk on log(beta)
+  logbeta += rnorm(0, sigma_proc);
+  double beta = exp(logbeta);
+
+  // force of infection
+  double lambda = beta * I / N;
+  
+  // transitions
+  double new_inf = rbinom(S, 1 - exp(-lambda * dt));
+  double new_rec = rbinom(I, 1 - exp(-gamma * dt));
+
+  // incidence this step
+  C += new_inf;  
+  
+  // state updates
+  S -= new_inf;
+  I += new_inf - new_rec;
+  R += new_rec;
+")
+
+rinit <- Csnippet("
+  S = S0;
+  I = I0;
+  R = N - S - I;
+  C = 0;
+  logbeta = logbeta0;
+")
+
+```
+
+### Measurement Density - dmeas
+
+This calculates the likelihood of observing $Y_t$ (reported cases) given the latent incidence $C_t$ using the Negative Binomial distribution.
+
+dnbinom_mu: Negative binomial distribution with number of success size and mean mu
+
+```{r}
+dmeas_nb <- Csnippet("
+  double mu = rho * C;
+  if (mu < 1e-10) mu = 1e-10;
+  lik = dnbinom_mu(cases, k, mu, give_log);
+")
+
+rmeas_nb <- Csnippet("
+  double mu = rho * C;
+  if (mu < 1e-10) mu = 1e-10;
+  cases = rnbinom_mu(k, mu);
+")
+
+```
+
+### For Poisson Distribution
+
+```{r}
+dmeas_pois <- Csnippet("
+  double mu = rho * C;
+  if (mu < 1e-10) mu = 1e-10;
+  lik = dpois(cases, mu, give_log);
+")
+
+rmeas_pois <- Csnippet("
+  double mu = rho * C;
+  if (mu < 1e-10) mu = 1e-10;
+  cases = rpois(mu);
+")
+
+```
+
+### Initialization 
+
+```{r}
+param_start <- c(
+  gamma      = 0.45,      
+  rho        = 0.28,
+  k          = 9,
+  N          = N_pop,
+  logbeta0   = log(1.15),   
+  sigma_proc = 0.045,       
+  S0         = N_pop - 30,
+  I0         = 30
+)
+
+```
+
+```{r}
+param_aggressive <- c(
+  gamma      = 0.4,
+  rho        = 0.30,
+  k          = 9,
+  N          = N_pop,
+  logbeta0   = log(1.1),     # beta0 ~ 1.1
+  sigma_proc = 0.06,
+  S0         = N_pop - 50,
+  I0         = 50
+)
+```
+
+```{r}
+param_start_pois <- c(
+  gamma      = unname(param_start["gamma"]),
+  rho        = unname(param_start["rho"]),
+  N          = unname(param_start["N"]),
+  logbeta0   = unname(param_start["logbeta0"]),
+  sigma_proc = unname(param_start["sigma_proc"]),
+  S0         = unname(param_start["S0"]),
+  I0         = unname(param_start["I0"])
+)
+
+param_aggressive_pois <- c(
+  gamma      = unname(param_aggressive["gamma"]),
+  rho        = unname(param_aggressive["rho"]),
+  N          = unname(param_aggressive["N"]),
+  logbeta0   = unname(param_aggressive["logbeta0"]),
+  sigma_proc = unname(param_aggressive["sigma_proc"]),
+  S0         = unname(param_aggressive["S0"]),
+  I0         = unname(param_aggressive["I0"])
+)
+
+```
+
+# Build the process functions, and the parameter definitions to build the final pomp object.
+
+Build the pomp object negative binomial:
+
+```{r}
+pomp_nb <- pomp(
+  data = ebola_timeseries,           # must have columns: time, cases
+  times = "time",
+  t0 = 0,
+
+  rprocess = discrete_time(step.fun = rproc, delta.t = 1),
+  rmeasure = rmeas_nb,
+  dmeasure = dmeas_nb,
+  rinit    = rinit,
+
+  statenames = c("S","I","R","C","logbeta"),
+  paramnames = names(param_start),
+
+  partrans = parameter_trans(
+    log   = c("gamma","k","sigma_proc"),
+    logit = c("rho")
+  ),
+
+  accumvars = c("C")
+)
+
+```
+
+```{r}
+pomp_ps <- pomp(
+  data = ebola_timeseries,
+  times = "time",
+  t0 = 0,
+
+  rprocess = discrete_time(step.fun = rproc, delta.t = 1),
+  rmeasure = rmeas_pois,
+  dmeasure = dmeas_pois,
+  rinit    = rinit,
+
+  statenames = c("S","I","R","C","logbeta"),
+  paramnames = names(param_start_pois),
+
+  partrans = parameter_trans(
+    log   = c("gamma","sigma_proc"),   
+    logit = c("rho")                   
+  ),
+
+  accumvars = c("C")
+)
+
+```
+
+```{r}
+sim_nb <- simulate(pomp_nb,params = param_aggressive,nsim = 1,format = "data.frame",include.data = TRUE)
+
+sim_only_nb  <- subset(sim_nb, .id != "data")
+data_only_nb <- subset(sim_nb, .id == "data")
+
+```
+
+```{r}
+sim_ps <- simulate(pomp_ps, params = param_aggressive_pois, nsim = 1, format = "data.frame",include.data = TRUE)
+
+sim_only_ps  <- subset(sim_ps, .id != "data")
+data_only_ps <- subset(sim_ps, .id == "data")
+
+```
+
+```{r}
+ggplot() +
+  geom_point(data = data_only_nb, aes(time, cases), alpha = 0.7) +
+  geom_line(data = sim_only_nb, aes(time, cases), linewidth = 1) +
+  scale_y_log10() +
+  labs(title="Observed vs Simulated (log scale)", x="Week", y="Cases (log10)") +
+  theme_minimal()
+```
+
+```{r}
+ggplot() +
+  geom_point(data = data_only_ps, aes(time, cases), alpha = 0.7) +
+  geom_line(data = sim_only_ps,  aes(time, cases), linewidth = 1) +
+  scale_y_log10() +
+  labs(title="Observed vs Simulated (log scale)", x="Week", y="Cases (log10)") +
+  theme_minimal()
+
+
+```
+### R_eff for NB
+
+```{r}
+sim_only_nb <- subset(sim_nb, .id != "data")
+sim_only_nb$beta <- exp(sim_only_nb$logbeta)
+sim_only_nb$R_eff <- (sim_only_nb$beta / param_start["gamma"]) *
+                     (sim_only_nb$S / param_start["N"])
+
+head(sim_only_nb[, c("time","beta","R_eff","S","I","C","cases")],10)
+
+```
+
+### R_eff for poisson
+```{r}
+sim_only <- subset(sim_ps, .id != "data")
+sim_only$beta <- exp(sim_only$logbeta)
+sim_only$R_eff <- (sim_only$beta / param_start_pois["gamma"]) * (sim_only$S / param_start_pois["N"])
+
+head(sim_only[, c("time","beta","R_eff","S","I","C","cases")], 10)
+
+```
+
+```{r}
+# Negative Binomial Fit
+set.seed(9999) 
+fit_nb <- mif2(
+  pomp_nb,
+  params = param_aggressive,
+  Np = 2000,
+  Nmif = 80,
+  cooling.fraction.50 = 0.5,
+  rw.sd = rw_sd(
+    logbeta0   = 0.10,
+    gamma      = 0.02,
+    rho        = 0.02,
+    sigma_proc = 0.01,
+    k          = 0.02
+  )
+)
+
+fit_ps <- mif2(
+  pomp_ps,
+  params = param_aggressive_pois,
+  Np = 2000,
+  Nmif = 80,
+  cooling.fraction.50 = 0.5,
+  rw.sd = rw_sd(
+    logbeta0   = 0.10,
+    gamma      = 0.02,
+    rho        = 0.02,
+    sigma_proc = 0.01
+  )
+)
+
+cat("Negative Binomial coefficients:\n")
+print(coef(fit_nb))
+
+cat("\nPoisson coefficients:\n")
+print(coef(fit_ps))
+
+```
+```{r}
+nsim <- 200
+set.seed(9999)
+
+# Simulate trajectories 
+sim_traj_nb   <- simulate(fit_nb,   nsim = nsim, format = "data.frame", include.data = TRUE)
+sim_traj_pois <- simulate(fit_ps,   nsim = nsim, format = "data.frame", include.data = TRUE)
+
+#extract observed cases from include.data output
+get_observed <- function(sim_df) {
+  sim_df %>%
+    filter(.id == "data") %>%
+    select(time, observed = cases)
+}
+process_sim_ci <- function(sim_df, gamma_val, N_val) {
+
+  sim_only <- sim_df %>% filter(.id != "data")
+  obs_only <- get_observed(sim_df)
+
+  # Compute Rt^eff per trajectory then summarize across trajectories
+  sim_only <- sim_only %>%
+    mutate(
+      beta  = exp(logbeta),
+      Rt_eff = (beta / gamma_val) * (S / N_val)
+    )
+
+  out <- sim_only %>%
+    group_by(time) %>%
+    summarise(
+      # incidence summaries 
+      C_mean  = mean(C, na.rm = TRUE),
+      C_lower = quantile(C, 0.025, na.rm = TRUE),
+      C_upper = quantile(C, 0.975, na.rm = TRUE),
+
+      # beta summaries
+      logbeta_mean  = mean(logbeta, na.rm = TRUE),
+      logbeta_lower = quantile(logbeta, 0.025, na.rm = TRUE),
+      logbeta_upper = quantile(logbeta, 0.975, na.rm = TRUE),
+
+      beta_mean  = mean(beta, na.rm = TRUE),
+      beta_lower = quantile(beta, 0.025, na.rm = TRUE),
+      beta_upper = quantile(beta, 0.975, na.rm = TRUE),
+
+      # Rt summaries
+      Rt_mean  = mean(Rt_eff, na.rm = TRUE),
+      Rt_lower = quantile(Rt_eff, 0.025, na.rm = TRUE),
+      Rt_upper = quantile(Rt_eff, 0.975, na.rm = TRUE),
+
+      .groups = "drop"
+    ) %>%
+    left_join(obs_only, by = "time")
+
+  out
+}
+
+# Use fitted gamma
+gamma_nb <- unname(coef(fit_nb)["gamma"])
+gamma_ps <- unname(coef(fit_ps)["gamma"])
+
+df_nb_ci   <- process_sim_ci(sim_traj_nb,   gamma_val = gamma_nb, N_val = N_pop) %>% mutate(model = "NegBin")
+df_pois_ci <- process_sim_ci(sim_traj_pois, gamma_val = gamma_ps, N_val = N_pop) %>% mutate(model = "Poisson")
+
+df_combined_ci <- bind_rows(df_nb_ci, df_pois_ci)
+
+# Plot Rt
+ggplot(df_combined_ci, aes(x = time, y = Rt_mean, color = model, fill = model)) +
+  geom_line(linewidth = 1) +
+  geom_ribbon(aes(ymin = Rt_lower, ymax = Rt_upper), alpha = 0.2, color = NA) +
+  geom_hline(yintercept = 1, linetype = "dashed") +
+  labs(
+    title = "Estimated Rt trajectories with 95% interval (simulation-based)",
+    x = "Time (weeks)",
+    y = "Effective reproduction number (Rt)"
+  ) +
+  coord_cartesian(ylim = c(0, 3.5)) +
+  theme_minimal()
+
+head(df_nb_ci[, c("time","observed")], 10)
+
+
+```
+
+
+```{r}
+p1 <- ggplot(df_nb_ci, aes(x = time)) +
+  geom_line(aes(y = observed, color = "Observed"), linewidth = 1.2) +
+  geom_line(aes(y = C_mean, color = "Model mean"), linewidth = 1.2) +
+  geom_ribbon(
+    aes(ymin = C_lower, ymax = C_upper),
+    fill = "blue", alpha = 0.2
+  ) +
+  scale_color_manual(values = c("Observed" = "red", "Model mean" = "blue")) +
+  labs(
+    title = "Observed vs model-implied weekly incidence (Negative Binomial)",
+    y = "Cases",
+    x = "Week",
+    color = ""
+  ) +
+  theme_minimal(base_size = 14)
+p1
+```
+
+```{r}
+p2 <- ggplot(df_nb_ci, aes(x = time)) +
+  geom_line(aes(y = Rt_mean), color = "darkgreen", linewidth = 1.2) +
+  geom_ribbon(
+    aes(ymin = Rt_lower, ymax = Rt_upper),
+    fill = "darkgreen", alpha = 0.2
+  ) +
+  geom_hline(yintercept = 1, linetype = "dashed") +
+  labs(
+    title = "Estimated effective reproduction number (Rt)",
+    y = "Rt",
+    x = "Week"
+  ) +
+  theme_minimal(base_size = 14)
+p2
+```
+
+```{r}
+p3 <- ggplot(df_nb_ci, aes(x = time)) +
+  geom_line(aes(y = beta_mean), color = "purple", linewidth = 1.2) +
+  geom_ribbon(
+    aes(ymin = beta_lower, ymax = beta_upper),
+    fill = "purple", alpha = 0.2
+  ) +
+  labs(
+    title = expression("Estimated transmission rate " * beta[t]),
+    y = expression(beta[t]),
+    x = "Week"
+  ) +
+  theme_minimal(base_size = 14)
+p3
+```
+
+# For interpretability, consider log-transformations. 
+
+```{r}
+p1_log <- ggplot(df_nb_ci, aes(x = time)) +
+  geom_ribbon(
+    aes(ymin = C_lower + 1, ymax = C_upper + 1),
+    fill = "blue",
+    alpha = 0.2
+  ) +
+  geom_line(aes(y = C_mean + 1), color = "blue", linewidth = 1.1) +
+  geom_line(aes(y = observed + 1), color = "red", linewidth = 1.1) +
+  scale_y_log10() +
+  labs(
+    title = "Ebola Weekly Incidence (log scale)",
+    x = "Week",
+    y = "Weekly cases (log scale)"
+  ) +
+  theme_minimal(base_size = 12)
+p1_log
+  
+
+```
+
+```{r}
+process_sim <- function(sim_df, gamma_val, N_val) {
+
+  obs_df <- sim_df %>%
+    filter(.id == "data") %>%
+    select(time, observed = cases)
+
+  sim_only <- sim_df %>%
+    filter(.id != "data") %>%
+    group_by(time) %>%
+    summarise(
+      C_mean       = mean(C, na.rm = TRUE),
+      logbeta_mean = mean(logbeta, na.rm = TRUE),
+      S_mean       = mean(S, na.rm = TRUE),
+      .groups = "drop"
+    ) %>%
+    mutate(
+      beta_mean = exp(logbeta_mean),
+      Rt_mean   = (beta_mean / gamma_val) * (S_mean / N_val)
+    )
+  left_join(sim_only, obs_df, by = "time")
+}
+
+df_nb <- process_sim(sim_traj_nb, gamma_val = unname(coef(fit_nb)["gamma"]), N_val = N_pop) %>%
+  mutate(model = "NegBin")
+
+df_pois <- process_sim(sim_traj_pois, gamma_val = unname(coef(fit_ps)["gamma"]), N_val = N_pop) %>%
+  mutate(model = "Poisson")
+
+df_combined <- bind_rows(df_nb, df_pois)
+
+ggplot(df_combined, aes(x = time, color = model)) +
+  geom_line(aes(y = C_mean), linewidth = 1) +
+  geom_point(aes(y = observed), alpha = 0.35) +
+  labs(
+    title = "Model-implied weekly incidence vs observed cases",
+    x = "Time (weeks)",
+    y = "Weekly incidence (latent new infections)"
+  ) +
+  theme_minimal()
+
+```
+
+```{r}
+ggplot(df_combined, aes(x = time, y = Rt_mean, color = model)) +
+  geom_line(size = 1) +
+  geom_hline(yintercept = 1, linetype = "dashed") +
+  labs(
+    title = "Estimated Rt trajectories under different observation models",
+    x = "Time (weeks)",
+    y = "Effective reproduction number (Rt)"
+  ) +
+  theme_minimal()
+```
+
+```{r}
+ggplot(df_combined_ci, aes(x = time, y = C_mean, color = model, fill = model)) +
+  geom_line(linewidth = 1) +
+  geom_ribbon(aes(ymin = C_lower, ymax = C_upper), alpha = 0.2, color = NA) +
+  geom_point(aes(y = observed), alpha = 0.3) +
+  labs(
+    title = "Model-implied weekly incidence with 95% interval",
+    x = "Time (weeks)",
+    y = "Weekly incidence (new infections)"
+  ) +
+  theme_minimal()
+
+```
+
+```{r}
+
+intervention_weeks <- tibble(
+  week  = c(11, 15), 
+  event = c("Op. Octopus Ph1", "Op. Octopus Ph2")
+)
+df_plot <- df_combined_ci %>%
+  mutate(model = factor(model, levels = c("NegBin", "Poisson")))
+
+p_rt <- ggplot(df_plot, aes(x = time)) +
+  geom_ribbon(
+    aes(ymin = Rt_lower, ymax = Rt_upper, fill = model),
+    alpha = 0.25,
+    color = NA
+  ) +
+
+  # mean Rt lines
+  geom_line(
+    aes(y = Rt_mean, color = model),
+    linewidth = 0.8
+  ) +
+
+  # Rt = 1 reference
+  geom_hline(yintercept = 1, linetype = "dashed", linewidth = 0.8) +
+
+  # vertical intervention lines
+  geom_vline(
+    data = intervention_weeks,
+    aes(xintercept = week),
+    linetype = "dotted",
+    linewidth = 0.8,
+    color = "black",
+    inherit.aes = FALSE
+  ) +
+
+  geom_text(
+    data = intervention_weeks,
+    aes(x = week, y = 3.05, label = event),
+    angle = 90,
+    vjust = 1,
+    hjust = 0,
+    size = 5,
+    color = "black",
+    inherit.aes = FALSE
+  ) +
+
+  labs(
+    title = "Estimated Rt with Control Interventions",
+    x = "Weeks since onset",
+    y = "Effective reproduction number (Rt)",
+    color = "model",
+    fill  = "model"
+  ) +
+
+  coord_cartesian(ylim = c(0, 5)) +
+  theme_minimal(base_size = 12) +
+  theme(
+    plot.title = element_text(size = 14, face = "bold"),
+    legend.position = "right"
+  )
+
+p_rt
+
+
+
+```
+
+```{r}
+theta_hat <- coef(fit_nb)
+
+pf_resid <- pfilter(
+  pomp_nb,
+  params = theta_hat,
+  Np = 20000
+)
+
+filt <- as.data.frame(pf_resid)
+y <- as.numeric(obs(pomp_nb)["cases", ])
+
+```
+
+```{r}
+pomp_nb |> partrans(theta_hat, dir = "fromEst")
+pomp_nb |> partrans(theta_hat, dir = "toEst")
+```
+
+```{r}
+set.seed(123)
+nsim <- 500
+
+theta_hat <- coef(fit_nb)
+
+sim <- simulate(
+  pomp_nb,
+  params = theta_hat,
+  nsim = nsim,
+  format = "data.frame",
+  include.data = TRUE
+)
+
+# observed cases from the simulation output
+y_dat <- sim %>%
+  filter(.id == "data") %>%
+  arrange(time) %>%
+  select(time, cases)
+
+y <- y_dat$cases
+
+# simulated replicate cases
+yrep_long <- sim %>%
+  filter(.id != "data") %>%
+  arrange(.id, time) %>%
+  select(.id, time, cases)
+
+```
+
+```{r}
+acf(y, main = "ACF of observed cases")
+
+```
+
+```{r}
+acf_vec <- function(x, L = 20) {
+  a <- acf(x, plot = FALSE, lag.max = L, na.action = na.pass)$acf
+  as.numeric(a)[-1]  # drop lag 0
+}
+
+L <- 20
+acf_obs <- acf_vec(y, L)
+
+# compute ACF for each replicate (.id)
+acf_list <- by(yrep_long, yrep_long$.id, function(d) {
+  d <- d[order(d$time), ]
+  acf_vec(d$cases, L)
+})
+acf_mat <- do.call(rbind, acf_list)
+
+lo <- apply(acf_mat, 2, quantile, probs = 0.025, na.rm = TRUE)
+hi <- apply(acf_mat, 2, quantile, probs = 0.975, na.rm = TRUE)
+
+lags <- 1:L
+plot(lags, acf_obs, type = "h", xlab = "Lag", ylab = "ACF",
+     main = "Observed ACF with 95% simulation envelope")
+lines(lags, lo, lty = 2)
+lines(lags, hi, lty = 2)
+abline(h = 0)
+
+```
+
+```{r}
+# run pfilter with fitted params
+pf_resid <- pfilter(pomp_nb, params = theta_hat, Np = 20000)
+
+pf <- as.data.frame(pf_resid)
+
+innov <- diff(pf$cond.logLik)     
+acf(innov, main = "ACF of PF innovations")
+
+```
+
